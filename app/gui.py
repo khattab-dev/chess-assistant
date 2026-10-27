@@ -14,8 +14,8 @@ import chess
 from .capture import (BoardRegion, _looks_like_board, grab_region,
                       select_region_interactive, try_auto_detect)
 from .engine import EngineWorker, LEVELS
-from .squares import (BLACK, EMPTY, WHITE, BoardSensor, chess_to_sensor_index,
-                      sensor_to_chess_index)
+from .pieces import PieceRenderer
+from .squares import BoardSensor, chess_to_sensor_index, sensor_to_chess_index
 from .tracker import PositionTracker
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -95,6 +95,7 @@ class ChessAssistantApp:
         self.board_canvas = tk.Canvas(mid, width=CELL * 8, height=CELL * 8,
                                       highlightthickness=0, bg="#222")
         self.board_canvas.grid(row=0, column=0, padx=(0, 12))
+        self.piece_renderer = PieceRenderer(self.root, CELL)
         self.suggest_lbl = tk.Label(mid, text="", font=("Segoe UI", 20, "bold"))
         self.suggest_lbl.grid(row=0, column=1, sticky="w")
 
@@ -117,7 +118,7 @@ class ChessAssistantApp:
         self.fen_var = tk.StringVar()
         ttk.Button(fenf, text="Copy FEN", width=10,
                    command=self._copy_fen).pack(side="left")
-        self._draw_board([EMPTY] * 64, True, None)
+        self._draw_board(None, True, None)
 
     # -- config ---------------------------------------------------------------
     def _load_config(self) -> None:
@@ -166,7 +167,7 @@ class ChessAssistantApp:
             self._save_config()
         if self.tracker.board is not None:
             self.tracker.reset_sensing()
-            self._draw_board(self.tracker.occ, self.tracker.white_bottom, None)
+            self._draw_board(self.tracker.board.copy(stack=False), self.tracker.white_bottom, None)
             self._set_status("Board found. Checking the tracked position…"
                              if self._tracking_uncertain else
                              "Board found. Tracking resumed.",
@@ -176,7 +177,7 @@ class ChessAssistantApp:
         self._tracking_uncertain = False
         self._set_status("Board calibrated. Detecting the opening and your color "
                          "automatically from the bottom side.", "green")
-        self._draw_board([EMPTY] * 64, True, None)
+        self._draw_board(None, True, None)
 
     def _place_panel_away_from_board(self, region: BoardRegion) -> None:
         """Keep the restored control panel from obscuring the capture area."""
@@ -263,7 +264,7 @@ class ChessAssistantApp:
         self._desync_count = 0
         self.fen_var.set("")
         self.suggest_lbl.config(text="")
-        self._draw_board([EMPTY] * 64, True, None)
+        self._draw_board(None, True, None)
         self._set_status("New game started.", "green")
         self._on_auto_detect()
 
@@ -552,7 +553,7 @@ class ChessAssistantApp:
         finally:
             self._board_recovery_pending = False
 
-    def _ev_position(self, occ, white_bottom, fen, _sans) -> None:
+    def _ev_position(self, _occ, white_bottom, fen, _sans) -> None:
         tr = self.tracker
         if not tr or fen != tr.fen:
             return
@@ -566,7 +567,7 @@ class ChessAssistantApp:
                 side = "White" if self.user_color == chess.WHITE else "Black"
                 self._set_status(f"Your color is now {side} (bottom).", "green")
         self.fen_var.set(fen)
-        self._draw_board(occ, white_bottom, None)
+        self._draw_board(chess.Board(fen), white_bottom, None)
         self.suggest_lbl.config(text="")
 
     def _ev_eval(self, data) -> None:
@@ -577,7 +578,7 @@ class ChessAssistantApp:
                 or tr.board.is_game_over()):
             return  # stale suggestion — the position moved on
         self.suggest_lbl.config(text=f"Play  {data['san']}")
-        self._draw_board(tr.occ, tr.white_bottom, data["uci"])
+        self._draw_board(chess.Board(data["fen"]), tr.white_bottom, data["uci"])
 
     def _ev_ambiguous(self, candidates) -> None:
         self._ask_promotion(candidates)
@@ -626,23 +627,20 @@ class ChessAssistantApp:
             self._set_status("Promotion confirmed. Tracking resumed.", "green")
 
     # -- drawing -------------------------------------------------------------------
-    def _draw_board(self, occ, white_bottom, arrow_uci) -> None:
+    def _draw_board(self, board: chess.Board | None, white_bottom, arrow_uci) -> None:
         cv = self.board_canvas
         cv.delete("all")
+        pieces = board.piece_map() if board is not None else {}
         for i in range(64):
             r, c = divmod(i, 8)
-            st = occ[sensor_to_chess_index(i, white_bottom)]
+            square = sensor_to_chess_index(i, white_bottom)
             x0, y0 = c * CELL, r * CELL
             light = (r + c) % 2 == 0
             cv.create_rectangle(x0, y0, x0 + CELL, y0 + CELL,
                                 fill=LIGHT_SQ if light else DARK_SQ, outline="")
-            if st == EMPTY:
-                continue
-            cx, cy = x0 + CELL / 2, y0 + CELL / 2
-            fill, outline = (( "#fafafa", "#555") if st == WHITE
-                             else ("#1a1a1a", "#000"))
-            cv.create_oval(cx - 11, cy - 11, cx + 11, cy + 11,
-                           fill=fill, outline=outline)
+            piece = pieces.get(square)
+            if piece is not None:
+                self.piece_renderer.draw(cv, piece, square, x0 + CELL / 2, y0 + CELL / 2)
         if arrow_uci:
             frm = chess.parse_square(arrow_uci[:2])
             to = chess.parse_square(arrow_uci[2:4])
@@ -651,7 +649,7 @@ class ChessAssistantApp:
             cv.create_line(c1 * CELL + CELL / 2, r1 * CELL + CELL / 2,
                            c2 * CELL + CELL / 2, r2 * CELL + CELL / 2,
                            fill="#f5b800", width=6, arrow=tk.LAST,
-                           capstyle="round", arrowshape=(14, 16, 6))
+                           capstyle="round", arrowshape=(14, 16, 6), tags=("suggestion",))
 
     # -- misc ------------------------------------------------------------------------
     def _set_status(self, text, color=None) -> None:
@@ -675,7 +673,9 @@ class ChessAssistantApp:
     def _clear_advice(self) -> None:
         self.suggest_lbl.config(text="")
         if self.tracker:
-            self._draw_board(self.tracker.occ, self.tracker.white_bottom, None)
+            board = self.tracker.board
+            self._draw_board(board.copy(stack=False) if board is not None else None,
+                             self.tracker.white_bottom, None)
 
     def _copy_fen(self) -> None:
         fen = self.fen_var.get()

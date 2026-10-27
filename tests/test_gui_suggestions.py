@@ -80,7 +80,7 @@ def test_engine_results_reach_move_label_and_arrow(app):
     app._poll()
 
     app.suggest_lbl.config.assert_called_with(text="Play  e4")
-    app._draw_board.assert_called_with(app.tracker.occ, True, "e2e4")
+    app._draw_board.assert_called_with(app.tracker.board, True, "e2e4")
     app.engine_worker.submit.assert_called_once()
 
 
@@ -98,7 +98,7 @@ def test_played_move_clears_suggestion_and_ignores_late_analysis(app):
     app._poll()
 
     app.suggest_lbl.config.assert_called_with(text="")
-    app._draw_board.assert_called_with(app.tracker.occ, True, None)
+    app._draw_board.assert_called_with(app.tracker.board, True, None)
     app.engine_worker.submit.assert_called_once()
 
 
@@ -200,7 +200,7 @@ def test_uncertain_tracking_clears_advice_and_rejects_late_engine_results(app):
     assert not hasattr(app, "_suggest_now")
 
     app.suggest_lbl.config.assert_called_with(text="")
-    app._draw_board.assert_called_with(app.tracker.occ, True, None)
+    app._draw_board.assert_called_with(app.tracker.board, True, None)
     app.engine_worker.submit.assert_not_called()
 
 

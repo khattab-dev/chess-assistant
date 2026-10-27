@@ -22,11 +22,16 @@ Stockfish.
   notices appear in green in **Activity**, without opening dialogs or
   restoring the control panel. Ordinary legal moves and board flips keep
   the existing game history.
-- **No piece recognition.** The tool senses only which squares are occupied
+- **Screen sensing.** The tool senses only which squares are occupied
   and by which color (background-color deviation per square, robust across
   themes and piece sets). Every sensed change is matched against the *legal
   moves* of the tracked game with `python-chess`, so captures, castling, en
   passant and promotions are all disambiguated by the rules of chess.
+- **Recognizable mini-board pieces.** The preview draws distinct kings,
+  queens, rooks, bishops, knights and pawns using the tracked position. Both
+  colors have contrasting outlines, and the icons follow captures, castling,
+  promotions and board orientation. Icons are rendered locally and cached;
+  screen sensing continues to use occupancy and piece color.
 - Screen changes must settle for several frames before a move is accepted,
   so a piece animation is not immediately committed as a move.
 - A missed frame is recovered by searching two consecutive moves, including
