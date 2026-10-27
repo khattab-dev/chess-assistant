@@ -3,44 +3,14 @@ from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes as wt
-import math
 import sys
 
-import chess
-
-from .squares import BoardRegion, chess_to_sensor_index
+from .arrows import ArrowStyle, arrow_points
+from .squares import BoardRegion
 
 
 class OverlayUnavailable(RuntimeError):
     pass
-
-
-def arrow_points(region: BoardRegion, white_bottom: bool, uci: str) -> list[tuple[int, int]]:
-    """Arrow polygon in board-local physical pixels, including flipped boards."""
-    move = chess.Move.from_uci(uci)
-    if not move or move.from_square == move.to_square:
-        raise ValueError("An overlay arrow needs two different squares")
-    centers = []
-    for square in (move.from_square, move.to_square):
-        row, col = divmod(chess_to_sensor_index(square, white_bottom), 8)
-        centers.append(((col + 0.5) * region.width / 8,
-                        (row + 0.5) * region.height / 8))
-    (x1, y1), (x2, y2) = centers
-    length = math.hypot(x2 - x1, y2 - y1)
-    ux, uy = (x2 - x1) / length, (y2 - y1) / length
-    nx, ny = -uy, ux
-    cell = min(region.width, region.height) / 8
-    shaft = max(3, cell * 0.1) / 2
-    head = max(10, cell * 0.42) / 2
-    head_length = min(max(12, cell * 0.48), length * 0.45)
-    bx, by = x2 - ux * head_length, y2 - uy * head_length
-    points = [(x1 + nx * shaft, y1 + ny * shaft),
-              (bx + nx * shaft, by + ny * shaft),
-              (bx + nx * head, by + ny * head), (x2, y2),
-              (bx - nx * head, by - ny * head),
-              (bx - nx * shaft, by - ny * shaft),
-              (x1 - nx * shaft, y1 - ny * shaft)]
-    return [(round(x), round(y)) for x, y in points]
 
 
 def _rgb(red, green, blue):
@@ -59,6 +29,7 @@ class _WindowsLayer:
         self.points = []
         self.error = None
         self._resources = []
+        self.style = ArrowStyle()
         self.class_name = f"ChessAssistantBoardArrow_{id(self):x}"
 
         def declare(dll, name, restype, *argtypes):
@@ -112,13 +83,15 @@ class _WindowsLayer:
         if not register(ctypes.byref(cls)):
             raise OverlayUnavailable("Could not register the board-arrow window")
         try:
-            create_brush = declare(self.gdi, "CreateSolidBrush", wt.HBRUSH, wt.DWORD)
-            create_pen = declare(self.gdi, "CreatePen", wt.HANDLE,
-                                 ctypes.c_int, ctypes.c_int, wt.DWORD)
-            self.background = create_brush(_rgb(255, 0, 255))
-            self.brush = create_brush(_rgb(255, 202, 40))
-            self.pen = create_pen(0, 2, _rgb(92, 57, 0))
+            self.create_brush = declare(self.gdi, "CreateSolidBrush", wt.HBRUSH, wt.DWORD)
+            self.create_pen = declare(self.gdi, "CreatePen", wt.HANDLE,
+                                      ctypes.c_int, ctypes.c_int, wt.DWORD)
+            self.background = self.create_brush(_rgb(*self.style.color_key))
+            self.brush = self.create_brush(_rgb(*self.style.rgb))
+            self.pen = self.create_pen(0, 2, _rgb(*self.style.outline))
             self._resources = [self.background, self.brush, self.pen]
+            if not all(self._resources):
+                raise OverlayUnavailable("Could not create arrow drawing resources")
             create = declare(self.user, "CreateWindowExW", wt.HWND,
                              wt.DWORD, wt.LPCWSTR, wt.LPCWSTR, wt.DWORD,
                              ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
@@ -130,10 +103,10 @@ class _WindowsLayer:
                                0x80000000, 0, 0, 1, 1, None, None, self.instance, None)
             if not self.hwnd:
                 raise OverlayUnavailable("Could not create the board-arrow window")
-            layered = declare(self.user, "SetLayeredWindowAttributes", wt.BOOL,
-                              wt.HWND, wt.DWORD, wt.BYTE, wt.DWORD)
+            self.layered = declare(self.user, "SetLayeredWindowAttributes", wt.BOOL,
+                                   wt.HWND, wt.DWORD, wt.BYTE, wt.DWORD)
             affinity = declare(self.user, "SetWindowDisplayAffinity", wt.BOOL, wt.HWND, wt.DWORD)
-            if not layered(self.hwnd, _rgb(255, 0, 255), 215, 3):
+            if not self.layered(self.hwnd, _rgb(*self.style.color_key), self.style.alpha, 3):
                 raise OverlayUnavailable("Transparent board arrows are unavailable")
             if not affinity(self.hwnd, 0x11):
                 raise OverlayUnavailable("Could not exclude the arrow from screen capture")
@@ -178,6 +151,33 @@ class _WindowsLayer:
     def is_active(self, owner) -> bool:
         return bool(owner and self.is_window(owner) and self.foreground() == owner)
 
+    def set_style(self, style: ArrowStyle) -> None:
+        if style == self.style:
+            return
+        resources = [self.create_brush(_rgb(*style.color_key)),
+                     self.create_brush(_rgb(*style.rgb)),
+                     self.create_pen(0, max(1, round(2 * style.scale)), _rgb(*style.outline))]
+        if not all(resources):
+            for handle in resources:
+                if handle:
+                    self.delete(handle)
+            raise OverlayUnavailable("Could not update arrow drawing resources")
+        # Hide before changing the transparency key so no old background can
+        # flash opaque. The next eligible show redraws at the current position.
+        if style.color_key != self.style.color_key or not style.opacity:
+            self.hide()
+        if not self.layered(self.hwnd, _rgb(*style.color_key), style.alpha, 3):
+            for handle in resources:
+                self.delete(handle)
+            raise OverlayUnavailable("Could not update arrow opacity")
+        old = self._resources
+        self.background, self.brush, self.pen = resources
+        self._resources, self.style = resources, style
+        for handle in old:
+            self.delete(handle)
+        self.invalidate(self.hwnd, None, False)
+        self.update_window(self.hwnd)
+
     def show(self, region: BoardRegion, points) -> None:
         self.points = points
         # TOPMOST, SWP_NOACTIVATE | SWP_SHOWWINDOW. This never restores or
@@ -217,6 +217,13 @@ class BoardArrowOverlay:
         self.region = None
         self.owner = None
         self._drawn = None
+        self.style = ArrowStyle()
+
+    def set_style(self, style: ArrowStyle) -> None:
+        if style != getattr(self, "style", ArrowStyle()):
+            self.layer.set_style(style)
+            self._drawn = None
+        self.style = style
 
     def bind_region(self, region: BoardRegion, owner=None) -> None:
         self.hide()
@@ -225,14 +232,18 @@ class BoardArrowOverlay:
             region.left + region.width // 2, region.top + region.height // 2)
 
     def show(self, region: BoardRegion, white_bottom: bool, uci: str) -> None:
+        style = getattr(self, "style", ArrowStyle())
+        if not style.opacity:
+            self.hide()
+            return
         if region != self.region:
             self.bind_region(region)
         if not self.layer.is_active(self.owner):
             self.hide()
             return
-        key = (*region.as_dict().values(), white_bottom, uci)
+        key = (*region.as_dict().values(), white_bottom, uci, style)
         if not self.layer.visible or key != self._drawn:
-            self.layer.show(region, arrow_points(region, white_bottom, uci))
+            self.layer.show(region, arrow_points(region, white_bottom, uci, style.thickness))
             self._drawn = key
 
     def hide(self) -> None:

@@ -10,7 +10,10 @@ import tkinter as tk
 from tkinter import simpledialog, ttk
 
 import chess
+from PIL import ImageTk
 
+from .arrows import ArrowStyle, render_arrow
+from .arrow_ui import ArrowControls
 from .capture import (BoardRegion, _looks_like_board, grab_region,
                       select_region_interactive, try_auto_detect)
 from .engine import EngineWorker, LEVELS
@@ -93,6 +96,9 @@ class ChessAssistantApp:
 
     # -- UI ------------------------------------------------------------------
     def _build_ui(self) -> None:
+        self.arrow_style = ArrowStyle()
+        self._arrow_save_after = None
+        self._arrow_image = None
         pad = dict(padx=8, pady=4)
         top = ttk.Frame(self.root)
         top.pack(fill="x", **pad)
@@ -115,6 +121,9 @@ class ChessAssistantApp:
         self.overlay_check = ttk.Checkbutton(game, text="Board arrow", variable=self.board_arrow,
                                              command=self._on_overlay_toggle)
         self.overlay_check.pack(side="left", padx=(12, 0))
+        ttk.Button(game, text="Arrow style", command=self._toggle_arrow_settings).pack(side="left", padx=6)
+        self.arrow_controls = ArrowControls(self.root, self.arrow_style,
+                                            self._on_arrow_style_changed, self._set_status)
 
         mid = ttk.Frame(self.root)
         mid.pack(fill="x", **pad)
@@ -154,13 +163,17 @@ class ChessAssistantApp:
                 cfg = json.load(f)
             self.level.set(cfg.get("strength", "Balanced"))
             self.board_arrow.set(cfg.get("board_arrow", True))
+            self.arrow_style = ArrowStyle.from_config(cfg.get("arrow_style"))
+            if hasattr(self, "arrow_controls"):
+                self.arrow_controls.set_style(self.arrow_style)
             # Screen coordinates can become stale between runs. Always detect
             # the current board after the window has initialized.
         except Exception:
             pass
 
     def _save_config(self) -> None:
-        cfg = {"strength": self.level.get(), "board_arrow": self.board_arrow.get()}
+        cfg = {"strength": self.level.get(), "board_arrow": self.board_arrow.get(),
+               "arrow_style": getattr(self, "arrow_style", ArrowStyle()).as_dict()}
         if self.sensor:
             cfg["region"] = self.sensor.region.as_dict()
         try:
@@ -763,10 +776,44 @@ class ChessAssistantApp:
             self.engine_worker.submit(fen, self.level.get())
 
     # -- click-through board arrow ---------------------------------------------
+    def _toggle_arrow_settings(self) -> None:
+        if self.arrow_controls.winfo_manager():
+            self.arrow_controls.pack_forget()
+        else:
+            self.arrow_controls.pack(fill="x", before=self._board_body, padx=8, pady=4)
+
+    def _on_arrow_style_changed(self, style: ArrowStyle) -> None:
+        self.arrow_style = style
+        review = getattr(self, "_recognition_review", None)
+        tr = self.tracker
+        if review:
+            review._redraw()
+        elif tr and tr.board is not None:
+            move = self._overlay_move
+            uci = (move[1] if move and move[0] == tr.fen and not self._tracking_uncertain
+                   and not self._paused and tr.board.turn == tr.user_color
+                   and not getattr(self, "_follow_moving", False) and not tr.board.is_game_over()
+                   else None)
+            self._draw_board(tr.board.copy(stack=False), tr.white_bottom, uci)
+        self._refresh_overlay()
+        if self._arrow_save_after:
+            self.root.after_cancel(self._arrow_save_after)
+        self._arrow_save_after = self.root.after(250, self._save_arrow_preferences)
+
+    def _save_arrow_preferences(self) -> None:
+        if self._arrow_save_after:
+            self.root.after_cancel(self._arrow_save_after)
+            self._arrow_save_after = None
+        self._save_config()
+
     def _init_overlay(self) -> None:
         try:
             self.overlay = BoardArrowOverlay()
+            self.overlay.set_style(getattr(self, "arrow_style", ArrowStyle()))
         except Exception as e:
+            if self.overlay:
+                self.overlay.close()
+                self.overlay = None
             self.board_arrow.set(False)
             self.overlay_check.state(["disabled"])
             self._set_status(f"Board arrow unavailable: {e}. Mini-board arrows still work.", "orange")
@@ -800,6 +847,7 @@ class ChessAssistantApp:
             self.overlay.hide()
             return
         try:
+            self.overlay.set_style(getattr(self, "arrow_style", ArrowStyle()))
             self.overlay.show(self.sensor.region, tr.white_bottom, move[1])
         except Exception as e:
             self.overlay.close()
@@ -1003,6 +1051,7 @@ class ChessAssistantApp:
     def _draw_board(self, board: chess.Board | None, white_bottom, arrow_uci) -> None:
         cv = self.board_canvas
         cv.delete("all")
+        self._arrow_image = None
         pieces = board.piece_map() if board is not None else {}
         for i in range(64):
             r, c = divmod(i, 8)
@@ -1015,14 +1064,11 @@ class ChessAssistantApp:
             if piece is not None:
                 self.piece_renderer.draw(cv, piece, square, x0 + CELL / 2, y0 + CELL / 2)
         if arrow_uci:
-            frm = chess.parse_square(arrow_uci[:2])
-            to = chess.parse_square(arrow_uci[2:4])
-            r1, c1 = divmod(chess_to_sensor_index(frm, white_bottom), 8)
-            r2, c2 = divmod(chess_to_sensor_index(to, white_bottom), 8)
-            cv.create_line(c1 * CELL + CELL / 2, r1 * CELL + CELL / 2,
-                           c2 * CELL + CELL / 2, r2 * CELL + CELL / 2,
-                           fill="#f5b800", width=6, arrow=tk.LAST,
-                           capstyle="round", arrowshape=(14, 16, 6), tags=("suggestion",))
+            self._arrow_image = ImageTk.PhotoImage(
+                render_arrow(CELL * 8, white_bottom, arrow_uci,
+                             getattr(self, "arrow_style", ArrowStyle())), master=self.root)
+            cv.create_image(0, 0, anchor="nw", image=self._arrow_image,
+                             tags=("suggestion", "arrow:" + arrow_uci))
 
     # -- misc ------------------------------------------------------------------------
     def _set_status(self, text, color=None) -> None:
@@ -1066,6 +1112,8 @@ class ChessAssistantApp:
 
     def _on_close(self) -> None:
         self._running = False
+        if getattr(self, "_arrow_save_after", None):
+            self._save_arrow_preferences()
         self._close_recognition()
         if self.overlay:
             self.overlay.close()

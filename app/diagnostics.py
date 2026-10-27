@@ -11,6 +11,7 @@ import mss
 import numpy as np
 
 from .engine import EngineWorker
+from .arrows import ArrowStyle, render_arrow
 from .gui import ChessAssistantApp
 from .overlay import BoardArrowOverlay
 from .paths import bundle_root, config_path, find_stockfish
@@ -49,6 +50,14 @@ def run_self_test(report_path: str) -> int:
         overlay = BoardArrowOverlay()
         report["overlay"] = bool(overlay.layer.hwnd)
         assert report["overlay"]
+        style = ArrowStyle("#ff00ff", 40, 150)
+        overlay.set_style(style)
+        assert overlay.layer.style == style
+        app.arrow_style = style
+        app.arrow_controls.set_style(style)
+        app._draw_board(chess.Board(), True, "e2e4")
+        assert render_arrow(272, True, "e2e4", style).getchannel("A").getextrema()[1] == style.alpha
+        report["custom_arrows"] = True
         engine_path = find_stockfish()
         report["engine_path"] = engine_path
         assert engine_path, "Stockfish was not bundled"

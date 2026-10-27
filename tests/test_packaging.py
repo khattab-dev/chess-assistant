@@ -5,6 +5,7 @@ import sys
 from unittest.mock import Mock
 
 from app import paths
+from app.arrows import ArrowStyle
 from app.gui import ChessAssistantApp
 
 
@@ -88,7 +89,8 @@ def test_settings_create_the_user_directory_and_reload(monkeypatch, tmp_path):
     app.board_arrow.get.return_value = False
     app.sensor = None
     app._save_config()
-    assert json.loads(config.read_text()) == {"strength": "Casual", "board_arrow": False}
+    assert json.loads(config.read_text()) == {"strength": "Casual", "board_arrow": False,
+                                              "arrow_style": ArrowStyle().as_dict()}
     app._load_config()
     app.level.set.assert_called_once_with("Casual")
     app.board_arrow.set.assert_called_once_with(False)

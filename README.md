@@ -56,6 +56,14 @@ Stockfish.
   excluded from screen capture so it does not interfere with sensing.
   This uses Windows 10 version 2004 or newer; other systems retain the
   mini-board arrow. The checkbox setting is saved between runs.
+- **Custom arrows.** Click **Arrow style** beside **Board arrow** to expand
+  the inline controls. Choose a preset or enter a custom `#RRGGBB` hex color,
+  adjust **Opacity** from 0–100%, and **Thickness** from 50–200%. A live preview
+  works even when no move is currently suggested. The same color, opacity and
+  thickness apply to the game-window arrow and mini-board; thickness scales
+  with board size. Opacity 0% hides the arrow. **Reset defaults** restores the
+  amber arrow at 85% opacity and 100% thickness. Settings save automatically
+  and survive restarts. Controls stay in the panel and open no settings dialogs.
 - **Follow the game window (Windows).** The detected board is bound to its
   containing window, independently of the **Board arrow** checkbox. After
   a move, the tool updates the capture coordinates using the window's client
@@ -122,7 +130,8 @@ panel or changing settings:
 .\dist\ChessAssistant.exe --self-test "$env:TEMP\chess-assistant-check.json"
 ```
 
-The JSON report covers bundled imports, native window geometry, recognition model inference,
+The JSON report covers bundled imports, custom arrow rendering and native styling,
+native window geometry, recognition model inference,
 screen-capture access, all twelve piece icons, the native overlay, a real
 engine suggestion and engine shutdown.
 This diagnostic requires an interactive Windows desktop.
@@ -243,6 +252,8 @@ app/tracker.py       diff -> legal move matching, FEN state, desync detection
 app/engine.py        Stockfish worker thread: best move + eval
 app/gui.py           Tkinter control panel
 app/overlay.py       Windows transparent click-through board arrow
+app/arrows.py        shared arrow appearance, geometry and RGBA rendering
+app/arrow_ui.py      inline color/opacity/thickness controls and live preview
 app/window_follow.py read-only game-window binding and physical coordinates
 app/pieces.py        cached recognizable mini-board piece icons
 app/recognition.py   local ONNX piece classification and state validation

@@ -93,12 +93,10 @@ def test_suggestion_arrow_keeps_correct_coordinates_over_piece_icons(ui, white_b
     ui._draw_board(chess.Board(), white_bottom, "e2e4")
     arrows = ui.board_canvas.find_withtag("suggestion")
     assert len(arrows) == 1
-    expected = []
-    for square in (chess.E2, chess.E4):
-        r, c = divmod(chess_to_sensor_index(square, white_bottom), 8)
-        expected.extend([c * CELL + CELL / 2, r * CELL + CELL / 2])
-    assert ui.board_canvas.coords(arrows[0]) == expected
-    assert ui.board_canvas.itemcget(arrows[0], "arrow") == "last"
+    assert ui.board_canvas.type(arrows[0]) == "image"
+    assert ui.board_canvas.coords(arrows[0]) == [0, 0]
+    assert "arrow:e2e4" in ui.board_canvas.gettags(arrows[0])
+    assert ui._arrow_image.width() == ui._arrow_image.height() == CELL * 8
     assert len(ui.board_canvas.find_withtag("piece")) == 32
 
 
