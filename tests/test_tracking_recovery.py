@@ -121,11 +121,13 @@ def test_wrong_recent_branch_is_replaced_only_by_unique_legal_continuation():
 
 
 def test_ambiguous_historical_positions_are_not_guessed():
-    tracker, _ = replay(["e4", "e5", "Nf3", "Nc6", "Ng1", "Nb8",
-                         "Nf3", "Nc6", "Bb5", "a6"])
+    tracker, _ = replay(["e4", "e5", "Bc4", "Bc5", "Nf3", "Nc6", "Ng1", "Nb8",
+                         "Nf3", "Nc6", "Ng1", "Nb8", "a4", "a6"])
     actual = chess.Board()
     actual.push_san("e4")
     actual.push_san("e5")
+    actual.push_san("Bc4")
+    actual.push_san("Bc5")
     before = tracker.fen
 
     result = settle(tracker, board_to_sensor_states(actual, True))

@@ -118,3 +118,17 @@ def test_promotion_is_chosen_inline_without_a_popup(ui):
     assert not ui.promotion_row.winfo_children()
     assert ui._events.get_nowait()[0] == "position"
     assert ui.root.state() == "withdrawn"
+
+
+def test_automatic_new_game_notice_is_green_and_clears_old_result_without_popup(ui):
+    tracker = PositionTracker()
+    tracker.start_from_sensed(["B"] * 16 + ["."] * 32 + ["W"] * 16, chess.BLACK)
+    ui.tracker = tracker
+    ui._gameover_shown = True
+    ui._ev_new_game(tracker)
+    assert not ui._gameover_shown
+    assert ui.user_color == chess.BLACK
+    assert "SUCCESS: New game detected. Tracking as Black." in ui.activity_txt.get("1.0", "end-1c")
+    assert ui.activity_txt.tag_ranges("success")
+    assert ui.suggest_lbl.cget("text") == ""
+    assert ui.root.state() == "withdrawn"

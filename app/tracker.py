@@ -20,6 +20,7 @@ from .squares import BLACK, EMPTY, WHITE, sensor_to_chess_index
 # Reject frames with more than this many changed squares — almost certainly a
 # page scroll, window move, or a piece animation in flight.
 MAX_CHANGES = 8
+NEW_GAME_SETTLE_TIME = 0.8
 
 _PROMO_ORDER = {chess.QUEEN: 0, chess.ROOK: 1, chess.BISHOP: 2, chess.KNIGHT: 3}
 
@@ -32,7 +33,8 @@ class _StrictGameBuilder(chess.pgn.GameBuilder):
 
 @dataclass
 class UpdateResult:
-    status: str  # "none" | "moved" | "ambiguous" | "desync" | "resynced" | "gameover"
+    status: str  # "none", "moved", "ambiguous", "desync", "resynced", "gameover",
+                 # "newgame_pending" or "newgame"
     move: chess.Move | None = None
     san: str | None = None
     mover: chess.Color | None = None
@@ -100,6 +102,7 @@ class PositionTracker:
         self._evaluated_key = None
         self._evaluated_result = UpdateResult("none")
         self._history_checked = False
+        self._new_game_candidate = None
 
     # -- setup --------------------------------------------------------------
     def start_from_sensed(self, states_img, user_color) -> str | None:
@@ -247,9 +250,38 @@ class PositionTracker:
             return UpdateResult("none", detail="waiting for a stable frame")
         key = (self.fen, states)
         if key != self._evaluated_key:
+            if (self.board is not None
+                    and states != tuple(board_to_sensor_states(self.board, self.white_bottom))
+                    and states == tuple(
+                    board_to_sensor_states(self.board, not self.white_bottom))):
+                # Flipping the current board does not start a new game.
+                self.white_bottom = not self.white_bottom
+                self.reset_sensing()
+                return UpdateResult("resynced", detail="Board orientation updated.")
             self._evaluated_key = key
             self._evaluated_result = self.update(states)
             self._history_checked = False
+            self._new_game_candidate = None
+            if (self._evaluated_result.status in ("none", "desync")
+                    and self._evaluated_result.detail and self.board is not None
+                    and states.count(WHITE) == 16 and states.count(BLACK) == 16):
+                # Legal moves take priority over reset detection. Only a full,
+                # uniquely recognized opening can replace the current game.
+                candidate = PositionTracker()
+                if candidate.start_from_sensed(list(states), self.user_color) is None:
+                    self._new_game_candidate = candidate
+        if self._new_game_candidate is not None:
+            if age < NEW_GAME_SETTLE_TIME:
+                return UpdateResult("newgame_pending", detail="confirming a new starting position")
+            candidate = self._new_game_candidate
+            self.board = candidate.board
+            self.white_bottom = candidate.white_bottom
+            self.occ = list(candidate.occ)
+            self.san_history = list(candidate.san_history)
+            self.start_turn = candidate.start_turn
+            self.start_fullmove = candidate.start_fullmove
+            self.reset_sensing()
+            return UpdateResult("newgame", detail="New game detected.")
         result = self._evaluated_result
         if (age >= 0.6 and result.detail and result.status in ("none", "desync")
                 and not self._history_checked):

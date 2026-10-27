@@ -25,6 +25,7 @@ def app():
     instance._paused = False
     instance._board_recovery_pending = False
     instance._board_hidden = False
+    instance._promotion_tracker = None
     instance._next_recovery_scan = float("inf")
     instance._panel_region = None
     instance._suggested_fen = ""

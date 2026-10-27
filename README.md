@@ -11,6 +11,14 @@ Stockfish.
   has already moved. The tool matches the starting layout or the first two
   half-moves against legal openings in either board orientation, retaining
   the detected moves and the correct side to move.
+- **Automatic new-game detection.** When a tracked game returns to a fresh
+  starting layout, the tool confirms it for about a second, clears the old
+  history and result, and resumes automatic tracking. It also recognizes a
+  new game if the first one or two half-moves already happened. Your chosen
+  color is kept; choose your color again if you switched sides. New-game
+  notices appear in green in **Activity**, without opening dialogs or
+  restoring the control panel. Ordinary legal moves and board flips keep
+  the existing game history.
 - **No piece recognition.** The tool senses only which squares are occupied
   and by which color (background-color deviation per square, robust across
   themes and piece sets). Every sensed change is matched against the *legal

@@ -352,7 +352,8 @@ class ChessAssistantApp:
         except Exception as e:
             self._set_status_event(f"Board search failed: {e}", "red")
             return
-        if region and sensor is self.sensor and not self._paused:
+        promotion_waiting = self.tracker is not None and self._promotion_tracker is self.tracker
+        if region and sensor is self.sensor and (not self._paused or promotion_waiting):
             self._board_recovery_pending = True
             self._post(("board_found", sensor, region))
 
@@ -360,13 +361,14 @@ class ChessAssistantApp:
         while self._running:
             time.sleep(0.1)
             sensor = self.sensor
-            if self._paused or self._board_recovery_pending:
+            tr = self.tracker
+            promotion_waiting = tr is not None and self._promotion_tracker is tr
+            if (self._paused and not promotion_waiting) or self._board_recovery_pending:
                 continue
             now = time.monotonic()
             if not sensor:
                 self._scan_for_board(None, now)
                 continue
-            tr = self.tracker
             check_board = now >= self._next_board_check
             if not tr and not check_board:
                 continue
@@ -393,19 +395,30 @@ class ChessAssistantApp:
                         tr.reset_sensing()
                     self._post(("board_visible", sensor))
             if (frame is None or self._board_misses or not tr
-                    or sensor is not self.sensor or self._paused):
+                    or sensor is not self.sensor or (self._paused and not promotion_waiting)):
                 continue
             try:
                 states, _ = sensor.sense(frame)
             except Exception as e:
                 self._set_status_event(f"Board sensing failed: {e}", "red")
                 continue
-            if sensor is not self.sensor or tr is not self.tracker or self._paused:
+            if (sensor is not self.sensor or tr is not self.tracker
+                    or (self._paused and not promotion_waiting)):
                 continue
             self._last_states = states
             res = tr.update_stable(states)
             fen = tr.fen
-            if res.status in ("moved", "gameover", "resynced"):
+            if res.status == "newgame":
+                self._desync_count = 0
+                self._tracking_uncertain = False
+                self._post(("new_game", tr))
+                self._post(("position", list(tr.occ), tr.white_bottom,
+                            fen, list(tr.san_history)))
+            elif res.status == "newgame_pending":
+                if not self._tracking_uncertain:
+                    self._tracking_uncertain = True
+                    self._post(("new_game_pending", tr))
+            elif res.status in ("moved", "gameover", "resynced"):
                 was_uncertain = self._tracking_uncertain
                 self._desync_count = 0
                 self._tracking_uncertain = False
@@ -423,8 +436,9 @@ class ChessAssistantApp:
                 self._post(("position", list(tr.occ), tr.white_bottom,
                             fen, list(tr.san_history)))
             elif res.status == "ambiguous":
-                self._paused = True
-                self._post(("ambiguous", res.candidates))
+                if not promotion_waiting:
+                    self._paused = True
+                    self._post(("ambiguous", res.candidates))
             elif res.status == "desync":
                 self._desync_count += 1
                 if not self._tracking_uncertain:
@@ -478,13 +492,36 @@ class ChessAssistantApp:
             except queue.Empty:
                 pass
         if self.tracker:
-            # Covers initial color selection, opponent moves, FEN resync,
-            # missed frames and board recovery without another button click.
+            # Covers initial color selection, opponent moves, new games,
+            # imports, missed frames and board recovery without another click.
             self._maybe_suggest(self.tracker, self.tracker.fen)
         self.root.after(80, self._poll)
 
     def _ev_status(self, text, color=None) -> None:
         self._set_status(text, color)
+
+    def _ev_new_game_pending(self, tr) -> None:
+        if tr is self.tracker and self._tracking_uncertain:
+            self._clear_advice()
+
+    def _ev_new_game(self, tr) -> None:
+        if tr is not self.tracker:
+            return
+        self._clear_promotion()
+        self._paused = False
+        self._gameover_shown = False
+        self._desync_count = 0
+        self._tracking_uncertain = False
+        self._suggested_fen = ""
+        self.user_color = tr.user_color
+        self._clear_advice()
+        if tr.user_color is None:
+            detail = "Choose your color to begin."
+        else:
+            side = "White" if tr.user_color == chess.WHITE else "Black"
+            detail = f"Tracking as {side}. Choose your color again if it changed."
+        self._last_log_entry = None
+        self._set_status("New game detected. " + detail, "green")
 
     def _ev_tracking_lost(self, tr) -> None:
         if tr is not self.tracker or not self._tracking_uncertain:
@@ -530,6 +567,9 @@ class ChessAssistantApp:
         tr = self.tracker
         if not tr or fen != tr.fen:
             return
+        if self._promotion_tracker is tr:
+            self._clear_promotion()
+            self._paused = False
         self.fen_var.set(fen)
         self._draw_board(occ, white_bottom, None)
         self.suggest_lbl.config(text="")

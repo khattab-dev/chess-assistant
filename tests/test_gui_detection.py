@@ -24,6 +24,7 @@ def app():
     instance._tracking_uncertain = False
     instance._board_recovery_pending = False
     instance._board_hidden = False
+    instance._promotion_tracker = None
     instance._next_recovery_scan = float("inf")
     instance._panel_region = None
     instance._clear_promotion = Mock()
