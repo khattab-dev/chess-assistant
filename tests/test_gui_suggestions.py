@@ -26,6 +26,9 @@ def app():
     instance._board_recovery_pending = False
     instance._board_hidden = False
     instance._promotion_tracker = None
+    instance.overlay = None
+    instance._overlay_move = None
+    instance.board_arrow = Mock()
     instance._next_recovery_scan = float("inf")
     instance._panel_region = None
     instance._suggested_fen = ""

@@ -14,9 +14,10 @@ import chess
 from .capture import (BoardRegion, _looks_like_board, grab_region,
                       select_region_interactive, try_auto_detect)
 from .engine import EngineWorker, LEVELS
+from .overlay import BoardArrowOverlay
 from .pieces import PieceRenderer
 from .squares import BoardSensor, chess_to_sensor_index, sensor_to_chess_index
-from .tracker import PositionTracker
+from .tracker import PositionTracker, board_to_sensor_states
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(ROOT_DIR, "config.json")
@@ -56,9 +57,12 @@ class ChessAssistantApp:
         self._panel_region: BoardRegion | None = None
         self._last_log_entry = None
         self._promotion_tracker = None
+        self.overlay = None
+        self._overlay_move = None
 
         self._build_ui()
         self._load_config()
+        self._init_overlay()
         if self.engine_path:
             self.engine_worker = EngineWorker(self.engine_path)
         else:
@@ -89,6 +93,10 @@ class ChessAssistantApp:
         self.level = tk.StringVar(value="Balanced")
         ttk.Combobox(game, textvariable=self.level, values=list(LEVELS),
                      state="readonly", width=9).pack(side="left")
+        self.board_arrow = tk.BooleanVar(value=True)
+        self.overlay_check = ttk.Checkbutton(game, text="Board arrow", variable=self.board_arrow,
+                                             command=self._on_overlay_toggle)
+        self.overlay_check.pack(side="left", padx=(12, 0))
 
         mid = ttk.Frame(self.root)
         mid.pack(fill="x", **pad)
@@ -126,13 +134,14 @@ class ChessAssistantApp:
             with open(CONFIG_PATH, encoding="utf-8") as f:
                 cfg = json.load(f)
             self.level.set(cfg.get("strength", "Balanced"))
+            self.board_arrow.set(cfg.get("board_arrow", True))
             # Screen coordinates can become stale between runs. Always detect
             # the current board after the window has initialized.
         except Exception:
             pass
 
     def _save_config(self) -> None:
-        cfg = {"strength": self.level.get()}
+        cfg = {"strength": self.level.get(), "board_arrow": self.board_arrow.get()}
         if self.sensor:
             cfg["region"] = self.sensor.region.as_dict()
         try:
@@ -163,6 +172,9 @@ class ChessAssistantApp:
         self._board_hidden = False
         self._next_board_check = 0.0
         self._place_panel_away_from_board(region)
+        self._hide_overlay()
+        if self.overlay:
+            self.overlay.bind_region(region)
         if save:
             self._save_config()
         if self.tracker.board is not None:
@@ -200,6 +212,7 @@ class ChessAssistantApp:
             self.root.geometry(f"+{cx}+{cy}")
 
     def _on_select_region(self) -> bool:
+        self._hide_overlay(clear=False)
         was_paused = self._paused
         self._paused = True
         error = None
@@ -222,6 +235,7 @@ class ChessAssistantApp:
 
     def _on_auto_detect(self) -> bool:
         """Explicit detection may hide the panel; failures are logged inline."""
+        self._hide_overlay(clear=False)
         was_paused = self._paused
         self._paused = True
         self._set_status("Looking for a board…")
@@ -254,6 +268,7 @@ class ChessAssistantApp:
 
     # -- game control -------------------------------------------------------------
     def _on_new_game(self) -> None:
+        self._hide_overlay()
         self._clear_promotion()
         self._paused = False
         self.tracker = None
@@ -274,6 +289,7 @@ class ChessAssistantApp:
             return
         resume_paused = self._paused
         self._paused = True
+        self._hide_overlay(clear=False)
         try:
             position = simpledialog.askstring(
                 "Import game", "Paste the full move list from the start "
@@ -440,6 +456,47 @@ class ChessAssistantApp:
             self.suggest_lbl.config(text="")
             self.engine_worker.submit(fen, self.level.get())
 
+    # -- click-through board arrow ---------------------------------------------
+    def _init_overlay(self) -> None:
+        try:
+            self.overlay = BoardArrowOverlay()
+        except Exception as e:
+            self.board_arrow.set(False)
+            self.overlay_check.state(["disabled"])
+            self._set_status(f"Board arrow unavailable: {e}. Mini-board arrows still work.", "orange")
+
+    def _hide_overlay(self, clear: bool = True) -> None:
+        if clear:
+            self._overlay_move = None
+        if self.overlay:
+            self.overlay.hide()
+
+    def _on_overlay_toggle(self) -> None:
+        self._refresh_overlay()
+        self._save_config()
+
+    def _refresh_overlay(self) -> None:
+        if not self.overlay:
+            return
+        tr = self.tracker
+        move = self._overlay_move
+        if (not self.board_arrow.get() or not self.sensor or not tr or tr.board is None
+                or not move or self._paused or self._tracking_uncertain or self._board_hidden
+                or self._board_recovery_pending or self._board_misses
+                or move[0] != tr.fen or tr.board.turn != tr.user_color
+                or tr.board.is_game_over()
+                or self._last_states != board_to_sensor_states(tr.board, tr.white_bottom)):
+            self.overlay.hide()
+            return
+        try:
+            self.overlay.show(self.sensor.region, tr.white_bottom, move[1])
+        except Exception as e:
+            self.overlay.close()
+            self.overlay = None
+            self.board_arrow.set(False)
+            self.overlay_check.state(["disabled"])
+            self._set_status(f"Board arrow stopped: {e}", "red")
+
     # -- event plumbing -----------------------------------------------------------
     def _post(self, ev) -> None:
         self._events.put(ev)
@@ -470,6 +527,7 @@ class ChessAssistantApp:
             # Covers automatic startup, opponent moves, new games,
             # imports, missed frames and board recovery without another click.
             self._maybe_suggest(self.tracker, self.tracker.fen)
+        self._refresh_overlay()
         self.root.after(80, self._poll)
 
     def _ev_status(self, text, color=None) -> None:
@@ -567,6 +625,7 @@ class ChessAssistantApp:
                 side = "White" if self.user_color == chess.WHITE else "Black"
                 self._set_status(f"Your color is now {side} (bottom).", "green")
         self.fen_var.set(fen)
+        self._hide_overlay()
         self._draw_board(chess.Board(fen), white_bottom, None)
         self.suggest_lbl.config(text="")
 
@@ -579,6 +638,7 @@ class ChessAssistantApp:
             return  # stale suggestion — the position moved on
         self.suggest_lbl.config(text=f"Play  {data['san']}")
         self._draw_board(chess.Board(data["fen"]), tr.white_bottom, data["uci"])
+        self._overlay_move = (data["fen"], data["uci"])
 
     def _ev_ambiguous(self, candidates) -> None:
         self._ask_promotion(candidates)
@@ -593,6 +653,7 @@ class ChessAssistantApp:
         self._log_event("Engine ready.", "success")
 
     def _ev_engine_error(self, msg) -> None:
+        self._clear_advice()
         self._set_status("Engine: " + msg, "red")
 
     # -- inline promotion choice -------------------------------------------------
@@ -671,6 +732,7 @@ class ChessAssistantApp:
         self.activity_txt.config(state="disabled")
 
     def _clear_advice(self) -> None:
+        self._hide_overlay()
         self.suggest_lbl.config(text="")
         if self.tracker:
             board = self.tracker.board
@@ -685,6 +747,9 @@ class ChessAssistantApp:
 
     def _on_close(self) -> None:
         self._running = False
+        if self.overlay:
+            self.overlay.close()
+            self.overlay = None
         if self.engine_worker:
             self.engine_worker.stop()
         self.root.destroy()

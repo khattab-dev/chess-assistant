@@ -29,6 +29,8 @@ def ui(tk_root):
     app._last_log_entry = None
     app._gameover_shown = False
     app._promotion_tracker = None
+    app.overlay = None
+    app._overlay_move = None
     app._events = queue.Queue()
     app._build_ui()
     root.update_idletasks()

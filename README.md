@@ -32,6 +32,15 @@ Stockfish.
   colors have contrasting outlines, and the icons follow captures, castling,
   promotions and board orientation. Icons are rendered locally and cached;
   screen sensing continues to use occupancy and piece color.
+- **Arrow on the actual board (Windows).** **Board arrow** enables a
+  transparent, always-on-top, click-through arrow over the detected game.
+  It follows the capture region and orientation, and appears only while the
+  game window is active and the current suggestion matches your turn and
+  the sensed position. Alt-tabbing, moving a piece, lost tracking and game
+  results hide it automatically. The layer does not take focus and is
+  excluded from screen capture so it does not interfere with sensing.
+  This uses Windows 10 version 2004 or newer; other systems retain the
+  mini-board arrow. The checkbox setting is saved between runs.
 - Screen changes must settle for several frames before a move is accepted,
   so a piece animation is not immediately committed as a move.
 - A missed frame is recovered by searching two consecutive moves, including
@@ -152,12 +161,13 @@ app/squares.py       8x8 grid mapping, occupancy + piece-color sensing
 app/tracker.py       diff -> legal move matching, FEN state, desync detection
 app/engine.py        Stockfish worker thread: best move + eval
 app/gui.py           Tkinter control panel
+app/overlay.py       Windows transparent click-through board arrow
+app/pieces.py        cached recognizable mini-board piece icons
 tools/sense_test.py  debug the sensor on an image file
 tests/               tracker and sensor test suites
 ```
 
 ## Roadmap ideas
 
-- Always-on-top transparent overlay drawing the arrow on the game window
 - Camera-based physical board support
 - Coaching mode: threat warnings, blunder alerts, alternate lines

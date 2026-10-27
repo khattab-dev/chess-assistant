@@ -25,6 +25,9 @@ def app():
     instance._board_recovery_pending = False
     instance._board_hidden = False
     instance._promotion_tracker = None
+    instance.overlay = None
+    instance._overlay_move = None
+    instance.board_arrow = Mock()
     instance._next_recovery_scan = float("inf")
     instance._panel_region = None
     instance._clear_promotion = Mock()
@@ -47,6 +50,7 @@ def test_startup_schedules_detection_and_does_not_restore_saved_bounds(monkeypat
     monkeypatch.setattr(ChessAssistantApp, "_build_ui", Mock())
     monkeypatch.setattr(ChessAssistantApp, "_load_config", Mock())
     monkeypatch.setattr(ChessAssistantApp, "_set_status", Mock())
+    monkeypatch.setattr(ChessAssistantApp, "_init_overlay", Mock())
     monkeypatch.setattr("app.gui.threading.Thread", Mock())
     root = Mock()
 
