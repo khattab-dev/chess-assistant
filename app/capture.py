@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ctypes
+import math
 import sys
 
 import cv2
@@ -137,7 +138,8 @@ def _looks_like_board(bgr: np.ndarray) -> bool:
 
 
 def _detect_board(img: np.ndarray,
-                  exclude_region: BoardRegion | None = None) -> BoardRegion | None:
+                  exclude_region: BoardRegion | None = None,
+                  preferred_region: BoardRegion | None = None) -> BoardRegion | None:
     """Find board-sized square candidates from grid lines in a screenshot."""
     h, w = img.shape[:2]
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -162,7 +164,17 @@ def _detect_board(img: np.ndarray,
 
     # Prefer the main board over small previews. Sample square corners first
     # so unrelated window edges do not require expensive ring sampling.
-    for left, top, side in sorted(candidates, key=lambda c: (-c[2], c[1], c[0])):
+    def priority(candidate):
+        left, top, side = candidate
+        if preferred_region is None:
+            return (-side, top, left)
+        ref = preferred_region
+        distance = math.hypot(left + side / 2 - ref.left - ref.width / 2,
+                              top + side / 2 - ref.top - ref.height / 2)
+        cost = 2 * abs(math.log(max(1, side) / max(1, ref.width))) + distance / max(side, ref.width, 1)
+        return (cost, -side, top)
+
+    for left, top, side in sorted(candidates, key=priority):
         if side < 160 or left < 0 or top < 0 or left + side > w or top + side > h:
             continue
         if (exclude_region and left < exclude_region.left + exclude_region.width
@@ -180,20 +192,30 @@ def _detect_board(img: np.ndarray,
     return None
 
 
-def try_auto_detect(exclude_region: BoardRegion | None = None) -> BoardRegion | None:
-    """Find a large checkerboard on the primary monitor.
+def try_auto_detect(exclude_region: BoardRegion | None = None,
+                    search_region: BoardRegion | None = None,
+                    preferred_region: BoardRegion | None = None) -> BoardRegion | None:
+    """Find a board on the primary monitor or within a bound window's client.
 
     Returns None when nothing convincing is found — fall back to manual
     selection.
     """
     try:
-        img, mon = grab_monitor(1)
+        if search_region is not None:
+            img, mon = grab_region(search_region), search_region.as_dict()
+        else:
+            img, mon = grab_monitor(1)
         exclude = None
         if exclude_region:
             exclude = BoardRegion(exclude_region.left - mon["left"],
                                   exclude_region.top - mon["top"],
                                   exclude_region.width, exclude_region.height)
-        region = _detect_board(img, exclude_region=exclude)
+        preferred = None
+        if preferred_region:
+            preferred = BoardRegion(preferred_region.left - mon["left"],
+                                    preferred_region.top - mon["top"],
+                                    preferred_region.width, preferred_region.height)
+        region = _detect_board(img, exclude_region=exclude, preferred_region=preferred)
         if region:
             region.left += mon["left"]
             region.top += mon["top"]

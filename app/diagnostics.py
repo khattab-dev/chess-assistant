@@ -15,6 +15,7 @@ from .gui import ChessAssistantApp
 from .overlay import BoardArrowOverlay
 from .paths import bundle_root, config_path, find_stockfish
 from .recognition import PieceRecognizer
+from .window_follow import WindowsWindowAPI
 
 
 def run_self_test(report_path: str) -> int:
@@ -37,6 +38,10 @@ def run_self_test(report_path: str) -> int:
         app._build_ui()
         app._draw_board(chess.Board(), True, "e2e4")
         root.update_idletasks()
+        window_api = WindowsWindowAPI()
+        snapshot = window_api.snapshot(root.winfo_id())
+        assert snapshot and snapshot.client.width > 0 and window_api.desktop().width > 0
+        report["window_follow"] = True
         report["piece_icons"] = len(app.piece_renderer.images)
         assert report["piece_icons"] == 12
         assert len(app.board_canvas.find_withtag("piece")) == 32

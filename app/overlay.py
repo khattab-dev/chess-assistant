@@ -218,11 +218,11 @@ class BoardArrowOverlay:
         self.owner = None
         self._drawn = None
 
-    def bind_region(self, region: BoardRegion) -> None:
+    def bind_region(self, region: BoardRegion, owner=None) -> None:
         self.hide()
         self.region = BoardRegion(**region.as_dict())
-        self.owner = self.layer.root_at(region.left + region.width // 2,
-                                        region.top + region.height // 2)
+        self.owner = owner if owner is not None else self.layer.root_at(
+            region.left + region.width // 2, region.top + region.height // 2)
 
     def show(self, region: BoardRegion, white_bottom: bool, uci: str) -> None:
         if region != self.region:

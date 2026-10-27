@@ -56,6 +56,19 @@ Stockfish.
   excluded from screen capture so it does not interfere with sensing.
   This uses Windows 10 version 2004 or newer; other systems retain the
   mini-board arrow. The checkbox setting is saved between runs.
+- **Follow the game window (Windows).** The detected board is bound to its
+  containing window, independently of the **Board arrow** checkbox. After
+  a move, the tool updates the capture coordinates using the window's client
+  offset. Resize, maximize, DPI changes, browser zoom and page scrolling trigger
+  board detection inside that same window. Searches prefer the board's previous
+  location and size and exclude the control panel. Arrows hide immediately when
+  window geometry changes, then tracking resumes after the new grid and position
+  settle. Moving between monitors, including monitors with negative coordinates,
+  uses physical screen pixels. Minimizing, covering or moving the board partly
+  offscreen pauses tracking quietly and preserves the game. Returning the visible
+  board resumes it without a dialog or focus change. If the game window closes,
+  use **Detect board again** to attach another window. The control panel itself
+  stays where you placed it; only capture and the board arrow follow the game.
 - Screen changes must settle for several frames before a move is accepted,
   so a piece animation is not immediately committed as a move.
 - A missed frame is recovered by searching two consecutive moves, including
@@ -91,6 +104,8 @@ is required. A single-file build takes a few seconds to unpack at startup.
 
 To rebuild on Windows using the project's virtual environment:
 
+Close the executable you intend to replace before rebuilding it.
+
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-build.txt
 .\.venv\Scripts\python.exe setup.py
@@ -107,7 +122,7 @@ panel or changing settings:
 .\dist\ChessAssistant.exe --self-test "$env:TEMP\chess-assistant-check.json"
 ```
 
-The JSON report covers bundled imports, recognition model inference,
+The JSON report covers bundled imports, native window geometry, recognition model inference,
 screen-capture access, all twelve piece icons, the native overlay, a real
 engine suggestion and engine shutdown.
 This diagnostic requires an interactive Windows desktop.
@@ -191,7 +206,13 @@ python tools/sense_test.py screenshot.png
   make sure you launch via `python main.py` (not through some scaling shim).
 - **Tracking desyncs every move** — the board region may be slightly off
   (grid misaligned). Re-select the region; drag exactly along the board edges.
-- **Multiple monitors** — region selection covers the primary monitor only.
+- **Multiple monitors** — initial automatic detection and manual selection cover
+  the primary monitor. Once bound, the game window can move to another monitor;
+  following and local board searches use virtual-desktop coordinates.
+- **Following pauses after switching tabs** — return to the game tab and keep
+  the full board visible. The tool follows the containing window and uses the
+  visible board image to detect changes inside it; it cannot read hidden tabs.
+  If you close the window and open a new one, click **Detect board again**.
 - **Tinted piece sets** — calibration learns the light and dark piece colors
   from their foreground, so White's pieces can be darker than the board.
   Pieces that blend almost completely into their square may still confuse
@@ -222,6 +243,7 @@ app/tracker.py       diff -> legal move matching, FEN state, desync detection
 app/engine.py        Stockfish worker thread: best move + eval
 app/gui.py           Tkinter control panel
 app/overlay.py       Windows transparent click-through board arrow
+app/window_follow.py read-only game-window binding and physical coordinates
 app/pieces.py        cached recognizable mini-board piece icons
 app/recognition.py   local ONNX piece classification and state validation
 app/recognition_ui.py inline piece corrections and missing game details

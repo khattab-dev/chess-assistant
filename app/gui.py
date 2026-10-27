@@ -21,6 +21,7 @@ from .recognition import PieceRecognizer, StableBoardReads
 from .recognition_ui import RecognitionReview
 from .squares import BoardSensor, chess_to_sensor_index, sensor_to_chess_index
 from .tracker import PositionTracker, _game_over_text, board_to_sensor_states
+from .window_follow import WindowsWindowAPI
 
 CONFIG_PATH = str(config_path())
 
@@ -67,10 +68,19 @@ class ChessAssistantApp:
         self._recognition_pending = None
         self._recognition_review = None
         self._next_recognition = 0.0
+        self._window_api = None
+        self._window_binding = None
+        self._follow_moving = self._follow_waiting = False
+        self._follow_geometry = self._follow_pending = None
+        self._window_wait_reason = None
 
         self._build_ui()
         self._load_config()
         self._init_overlay()
+        try:
+            self._window_api = WindowsWindowAPI()
+        except OSError:
+            pass  # Screen-based recovery remains available on other platforms.
         if self.engine_path:
             self.engine_worker = EngineWorker(self.engine_path)
         else:
@@ -185,8 +195,21 @@ class ChessAssistantApp:
         self._next_board_check = 0.0
         self._place_panel_away_from_board(region)
         self._hide_overlay()
+        self._window_binding = None
+        self._follow_moving = self._follow_waiting = False
+        self._follow_geometry = self._follow_pending = None
+        self._window_wait_reason = None
+        if getattr(self, "_window_api", None):
+            try:
+                self.root.update_idletasks()
+                self._window_binding = self._window_api.bind(region)
+            except Exception as error:
+                self._set_status(f"Could not bind the game window: {error}", "orange")
         if self.overlay:
-            self.overlay.bind_region(region)
+            if self._window_binding:
+                self.overlay.bind_region(region, owner=self._window_binding.hwnd)
+            else:
+                self.overlay.bind_region(region)
         if save:
             self._save_config()
         if self.tracker.board is not None:
@@ -339,12 +362,132 @@ class ChessAssistantApp:
             self._paused = resume_paused
 
     # -- capture loop -----------------------------------------------------------
+    def _window_wait(self, sensor, reason) -> None:
+        self._follow_waiting = True
+        self._tracking_uncertain = self._board_hidden = True
+        self._last_states = None
+        if reason != getattr(self, "_window_wait_reason", None):
+            self._window_wait_reason = reason
+            self._post(("window_waiting", sensor, reason))
+
+    def _follow_window(self, sensor, now) -> bool:
+        """Capture-thread geometry checks also run during inline review."""
+        binding = getattr(self, "_window_binding", None)
+        if not binding or not sensor:
+            return False
+        if self._board_recovery_pending:
+            return True
+        current = binding.snapshot()
+        if current is None:
+            self._window_wait(sensor, "Game window closed. Use 'Detect board again' to attach another window.")
+            return True
+        if not current.visible or current.minimized or binding.search_area(current) is None:
+            self._window_wait(sensor, "Game window hidden or minimized. Waiting for it to return.")
+            return True
+        predicted = binding.predicted(current)
+        if predicted and not binding.unobstructed(predicted, current):
+            self._window_wait(sensor, "Game board covered or outside the screen. Waiting for it to return.")
+            return True
+        if getattr(self, "_follow_waiting", False):
+            self._follow_waiting = False
+            self._window_wait_reason = None
+            self._next_board_check = 0.0
+        if current.geometry == binding.anchor.geometry:
+            self._follow_geometry = None
+            return False
+        if not getattr(self, "_follow_moving", False):
+            self._follow_moving = True
+            self._tracking_uncertain = True
+            self._last_states = None
+            self._next_recovery_scan = min(self._next_recovery_scan, now)
+            self._next_board_check = 0.0
+            self._post(("window_moving", sensor))
+        if current.geometry != getattr(self, "_follow_geometry", None):
+            self._follow_geometry, self._follow_since = current.geometry, now
+            return True
+        if now - self._follow_since < 0.2:
+            return True
+        if predicted:
+            try:
+                if _looks_like_board(grab_region(predicted)):
+                    self._queue_window_region(sensor, binding, predicted, current)
+                    return True
+            except Exception:
+                pass
+        self._scan_for_board(sensor, now)
+        return True
+
+    def _queue_window_region(self, sensor, binding, region, current) -> None:
+        if sensor is self.sensor and binding is self._window_binding:
+            self._board_recovery_pending = True
+            self._follow_pending = (sensor, binding)
+            self._post(("window_region", sensor, binding, region, current))
+
+    def _ev_window_waiting(self, sensor, reason) -> None:
+        if sensor is self.sensor and getattr(self, "_follow_waiting", False):
+            self._clear_advice()
+            self._set_status(reason, "orange")
+
+    def _ev_window_moving(self, sensor) -> None:
+        if sensor is self.sensor and getattr(self, "_follow_moving", False):
+            self._clear_advice()
+            self._set_status("Game window changed. Realigning the board…", "orange")
+
+    def _ev_window_region(self, previous_sensor, binding, region, detected) -> None:
+        if getattr(self, "_follow_pending", None) != (previous_sensor, binding):
+            return
+        try:
+            if previous_sensor is not self.sensor or binding is not self._window_binding:
+                return
+            current = binding.snapshot()
+            if (not current or current.geometry != detected.geometry
+                    or not binding.unobstructed(region, current)):
+                return  # The window moved again while the event was queued.
+            frame = grab_region(region)
+            if not _looks_like_board(frame):
+                return
+            sensor = BoardSensor(region)
+            sensor.calibrate(frame)
+            binding.reanchor(region, current)
+            self.sensor = sensor
+            self._follow_moving = self._follow_waiting = False
+            self._follow_geometry = self._window_wait_reason = None
+            self._board_hidden = False
+            self._board_misses = 0
+            self._next_board_check = 0.0
+            self._recognition_pending = self._recognition_source = None
+            self._last_states = None
+            self._suggested_fen = ""
+            self._tracking_uncertain = True
+            if self.tracker:
+                self.tracker.reset_sensing()
+            self._clear_advice()
+            if self.overlay:
+                self.overlay.bind_region(region, owner=binding.hwnd)
+            self._set_status("Board realigned. Checking the position…", "green")
+        except Exception as error:
+            self._set_status(f"Could not realign the board: {error}", "orange")
+        finally:
+            self._follow_pending = None
+            self._board_recovery_pending = False
+
     def _scan_for_board(self, sensor, now: float) -> None:
         """Search without hiding, restoring or focusing the control panel."""
         if now < self._next_recovery_scan:
             return
-        self._next_recovery_scan = now + 2.0
+        binding = getattr(self, "_window_binding", None)
+        self._next_recovery_scan = now + (0.5 if binding else 2.0)
         try:
+            if binding:
+                current = binding.snapshot()
+                search = binding.search_area(current) if current else None
+                if search is None:
+                    return
+                region = try_auto_detect(exclude_region=self._panel_region, search_region=search,
+                                         preferred_region=binding.search_hint(current))
+                if region and binding.unobstructed(region, current):
+                    self._queue_window_region(sensor, binding, region, current)
+                return  # A bound game is never replaced by another window.
             region = try_auto_detect(exclude_region=self._panel_region)
         except Exception as e:
             self._set_status_event(f"Board search failed: {e}", "red")
@@ -359,10 +502,22 @@ class ChessAssistantApp:
             time.sleep(0.1)
             sensor = self.sensor
             tr = self.tracker
+            now = time.monotonic()
+            if self._follow_window(sensor, now):
+                continue
             promotion_waiting = tr is not None and self._promotion_tracker is tr
             if (self._paused and not promotion_waiting) or self._board_recovery_pending:
+                if (self._paused and getattr(self, "_window_binding", None)
+                        and not self._board_recovery_pending and now >= self._next_board_check):
+                    self._next_board_check = now + 0.25
+                    try:
+                        if not _looks_like_board(grab_region(sensor.region)):
+                            self._follow_moving = True
+                            self._last_states = None
+                            self._scan_for_board(sensor, now)
+                    except Exception:
+                        pass
                 continue
-            now = time.monotonic()
             if not sensor:
                 self._scan_for_board(None, now)
                 continue
@@ -374,9 +529,15 @@ class ChessAssistantApp:
             except Exception:
                 frame = None
             if check_board:
-                self._next_board_check = now + 1.0
+                binding = getattr(self, "_window_binding", None)
+                self._next_board_check = now + (0.25 if binding else 1.0)
                 if frame is None or not _looks_like_board(frame):
                     self._board_misses += 1
+                    if binding:
+                        self._follow_moving = True
+                        self._tracking_uncertain = True
+                        self._last_states = None
+                        self._scan_for_board(sensor, now)
                     if self._board_misses == 3:
                         self._board_hidden = True
                         self._tracking_uncertain = True
@@ -386,6 +547,8 @@ class ChessAssistantApp:
                         self._scan_for_board(sensor, now)
                     continue
                 self._board_misses = 0
+                if binding:
+                    self._follow_moving = False
                 if self._board_hidden:
                     self._board_hidden = False
                     if tr:
@@ -548,6 +711,9 @@ class ChessAssistantApp:
         if not review or not self.sensor:
             return
         try:
+            binding = getattr(self, "_window_binding", None)
+            if binding and not binding.aligned(self.sensor.region):
+                raise ValueError("Wait for the game window to realign before confirming the position.")
             # The game may have changed while the review was open, or the user
             # may have alt-tabbed. Never commit an old screenshot as live state.
             frame = grab_region(self.sensor.region)
@@ -584,6 +750,9 @@ class ChessAssistantApp:
         """Called on the UI thread so reading engine strength is safe in Tk."""
         b = tr.board
         if (self.sensor and tr is self.tracker and self.engine_worker
+                and not getattr(self, "_follow_moving", False)
+                and not getattr(self, "_follow_waiting", False)
+                and not getattr(self, "_board_misses", 0)
                 and not self._paused and not self._board_recovery_pending
                 and not self._tracking_uncertain and not self._board_hidden
                 and b is not None and fen and fen != self._suggested_fen
@@ -616,6 +785,11 @@ class ChessAssistantApp:
         if not self.overlay:
             return
         tr = self.tracker
+        binding = getattr(self, "_window_binding", None)
+        if (binding and (not self.sensor or not binding.aligned(self.sensor.region))
+                or getattr(self, "_follow_moving", False) or getattr(self, "_follow_waiting", False)):
+            self.overlay.hide()
+            return
         move = self._overlay_move
         if (not self.board_arrow.get() or not self.sensor or not tr or tr.board is None
                 or not move or self._paused or self._tracking_uncertain or self._board_hidden
@@ -769,6 +943,7 @@ class ChessAssistantApp:
     def _ev_eval(self, data) -> None:
         tr = self.tracker
         if (not self.sensor or not tr or tr.board is None
+                or getattr(self, "_follow_moving", False) or getattr(self, "_follow_waiting", False)
                 or self._tracking_uncertain or self._board_hidden
                 or data["fen"] != tr.fen or tr.board.turn != tr.user_color
                 or tr.board.is_game_over()):

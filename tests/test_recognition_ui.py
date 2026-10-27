@@ -11,6 +11,7 @@ from app.recognition import BoardRead, PieceRecognizer, StableBoardReads
 from app.recognition_ui import PIECE_NAMES
 from app.squares import BoardRegion, BoardSensor, chess_to_sensor_index
 from app.tracker import PositionTracker, board_to_sensor_states
+from app.window_follow import WindowBinding, WindowSnapshot
 from test_activity_ui import tk_root, ui
 from test_gui_suggestions import app
 from test_recognition import POSITIONS, screenshot, symbols_for
@@ -253,3 +254,31 @@ def test_confirming_opponents_turn_does_not_suggest(recovery, monkeypatch):
     assert recovery.tracker.board.turn == chess.BLACK
     recovery._maybe_suggest(recovery.tracker, recovery.tracker.fen)
     recovery.engine_worker.submit.assert_not_called()
+
+
+def test_following_a_moved_window_preserves_the_inline_review(recovery, monkeypatch):
+    api = Mock()
+    original = WindowSnapshot(123, 456, BoardRegion(0, 0, 1000, 900))
+    binding = WindowBinding(api, original, recovery.sensor.region)
+    moved = WindowSnapshot(123, 456, BoardRegion(100, 100, 1000, 900))
+    api.snapshot.return_value = moved
+    api.desktop.return_value = BoardRegion(0, 0, 1920, 1080)
+    api.root_at.return_value = 123
+    recovery._window_binding = binding
+    old_sensor = recovery.sensor
+    view = recovery._recognition_review
+    recovery._follow_pending = (old_sensor, binding)
+    recovery._board_recovery_pending = True
+    monkeypatch.setattr("app.gui.grab_region", lambda _: screenshot())
+
+    recovery._ev_window_region(old_sensor, binding, BoardRegion(100, 100, 512, 512), moved)
+
+    assert recovery._recognition_review is view
+    assert recovery._paused
+    assert recovery.sensor is not old_sensor
+    assert recovery.sensor.region == BoardRegion(100, 100, 512, 512)
+    view.turn.set("White")
+    view._continue()
+    assert recovery._recognition_review is None
+    assert not recovery._tracking_uncertain
+    assert recovery.tracker.board is not None
