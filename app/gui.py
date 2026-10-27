@@ -16,11 +16,11 @@ from .capture import (BoardRegion, _looks_like_board, grab_region,
 from .engine import EngineWorker, LEVELS
 from .overlay import BoardArrowOverlay
 from .pieces import PieceRenderer
+from .paths import config_path
 from .squares import BoardSensor, chess_to_sensor_index, sensor_to_chess_index
 from .tracker import PositionTracker, board_to_sensor_states
 
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CONFIG_PATH = os.path.join(ROOT_DIR, "config.json")
+CONFIG_PATH = str(config_path())
 
 CELL = 34  # mini-board cell size, px
 LIGHT_SQ, DARK_SQ = "#eeeed2", "#769656"
@@ -145,6 +145,7 @@ class ChessAssistantApp:
         if self.sensor:
             cfg["region"] = self.sensor.region.as_dict()
         try:
+            os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, indent=2)
         except Exception:

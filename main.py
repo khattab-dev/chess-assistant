@@ -2,32 +2,28 @@
 
 Usage:  python main.py
 """
-import os
-import shutil
+import argparse
+import multiprocessing
 import tkinter as tk
 
 from app.capture import make_dpi_aware
 from app.gui import ChessAssistantApp
-
-
-def find_stockfish() -> str | None:
-    env = os.environ.get("CHESS_ENGINE_PATH")
-    if env and os.path.isfile(env):
-        return env
-    here = os.path.dirname(os.path.abspath(__file__))
-    for name in ("stockfish.exe", "stockfish"):
-        p = os.path.join(here, "engines", name)
-        if os.path.isfile(p):
-            return p
-    return shutil.which("stockfish")
+from app.paths import find_stockfish
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Chess Assistant")
+    parser.add_argument("--self-test", metavar="REPORT", help="check the build and write a JSON report")
+    args = parser.parse_args()
     make_dpi_aware()  # before any Tk window exists
+    if args.self_test:
+        from app.diagnostics import run_self_test
+        raise SystemExit(run_self_test(args.self_test))
     root = tk.Tk()
     ChessAssistantApp(root, find_stockfish())
     root.mainloop()
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     main()

@@ -1,0 +1,8 @@
+Stockfish 19, by the Stockfish developers.
+Launched as a separate UCI engine process by Chess Assistant.
+
+License: GNU GPL version 3 (see Stockfish-COPYING.txt).
+Authors: see Stockfish-AUTHORS.txt.
+Upstream source for this release:
+https://github.com/official-stockfish/Stockfish/tree/sf_19
+https://github.com/official-stockfish/Stockfish/releases/tag/sf_19

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import queue
+import subprocess
 import threading
 
 import chess
@@ -62,14 +63,22 @@ class EngineWorker:
                 pass
 
     def stop(self) -> None:
+        # A pending analysis must not prevent shutdown. Wait for Stockfish to
+        # exit before a one-file executable removes its extracted engine.
+        try:
+            self._requests.get_nowait()
+        except queue.Empty:
+            pass
         try:
             self._requests.put_nowait(None)
         except queue.Full:
             pass
+        self._thread.join(timeout=3.0)
 
     def _run(self) -> None:
         try:
-            engine = chess.engine.SimpleEngine.popen_uci(self.path)
+            options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+            engine = chess.engine.SimpleEngine.popen_uci(self.path, **options)
             engine.configure({"Threads": max(1, (os.cpu_count() or 2) // 2),
                               "Hash": 256})
         except Exception as e:

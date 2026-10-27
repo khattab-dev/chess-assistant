@@ -64,6 +64,39 @@ Stockfish.
 
 ## Setup
 
+### Windows executable
+
+Double-click `dist/ChessAssistant.exe` to run the standalone Windows app.
+Python and a separate Stockfish installation are not required. This is a
+64-bit Windows build with the engine, UI and screen-capture dependencies
+included. The board overlay requires Windows 10 version 2004 or newer.
+Settings are saved in `%LOCALAPPDATA%\ChessAssistant\config.json` so they
+survive moving the executable or restarting it. No administrator access
+is required. A single-file build takes a few seconds to unpack at startup.
+
+To rebuild on Windows using the project's virtual environment:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-build.txt
+.\.venv\Scripts\python.exe setup.py
+.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean ChessAssistant.spec
+```
+
+The result is `dist/ChessAssistant.exe`. The spec embeds `engines/stockfish.exe`
+and the upstream license notices from `licenses/`; it does not embed your
+personal `config.json`. To verify the built app without opening its control
+panel or changing settings:
+
+```powershell
+.\dist\ChessAssistant.exe --self-test "$env:TEMP\chess-assistant-check.json"
+```
+
+The JSON report covers bundled imports, screen-capture access, all twelve
+piece icons, the native overlay, a real engine suggestion and engine shutdown.
+This diagnostic requires an interactive Windows desktop.
+
+### Run from Python
+
 Requires Python 3.9+ on Windows (macOS/Linux also work).
 
 ```
