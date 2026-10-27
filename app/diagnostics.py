@@ -14,6 +14,7 @@ from .engine import EngineWorker
 from .gui import ChessAssistantApp
 from .overlay import BoardArrowOverlay
 from .paths import bundle_root, config_path, find_stockfish
+from .recognition import PieceRecognizer
 
 
 def run_self_test(report_path: str) -> int:
@@ -23,6 +24,9 @@ def run_self_test(report_path: str) -> int:
     try:
         # Exercise the native OpenCV, NumPy and screen-capture dependencies.
         assert cv2.cvtColor(np.zeros((8, 8, 3), np.uint8), cv2.COLOR_BGR2GRAY).shape == (8, 8)
+        read = PieceRecognizer().read(np.zeros((256, 256, 3), np.uint8))
+        assert len(read.symbols) == len(read.confidence) == 64
+        report["piece_recognition"] = True
         with mss.mss() as capture:
             assert len(capture.monitors) > 1
             report["monitors"] = len(capture.monitors) - 1

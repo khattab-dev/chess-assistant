@@ -173,6 +173,7 @@ def test_late_result_for_old_color_is_ignored_after_flip(app, monkeypatch):
 
 
 def test_unrecognized_midgame_logs_import_option_without_asking_for_color(app, monkeypatch):
+    app._consider_recognition = Mock()  # Recognition has its own real-image integration tests.
     app.tracker = PositionTracker(follow_bottom=True)
     app.user_color = None
     board = chess.Board()

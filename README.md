@@ -22,7 +22,22 @@ Stockfish.
   notices appear in green in **Activity**, without opening dialogs or
   restoring the control panel. Ordinary legal moves and board flips keep
   the existing game history.
-- **Screen sensing.** The tool senses only which squares are occupied
+- **Full piece recognition and midgame recovery.** If an opening cannot be
+  matched, or legal-move/history recovery fails, a bundled local classifier
+  reads all twelve piece types. Three consistent reads are required before
+  an inline review appears beside the mini-board. Check the preview, click
+  any square to correct its piece, and confirm your bottom color and whose
+  turn it is. Orange outlines mark uncertain squares. Choose the remaining
+  castling rights and any en passant target, then **Continue** to resume
+  tracking and automatic suggestions without a FEN. The live board is checked
+  again before committing, so alt-tabbing or making a move during review
+  cannot silently adopt a stale image. No notification dialog is opened.
+  **Read again** retries; **Cancel** suppresses the same proposed position.
+  The classifier runs offline on the CPU through OpenCV; no screenshot is
+  uploaded and no GPU or additional runtime is needed. The model comes from
+  [fenshot](https://github.com/scoriiu/fenshot) under the MIT license; its
+  pinned revision and license are included in `licenses/`.
+- **Continuous screen sensing.** Between recoveries the tool senses which squares are occupied
   and by which color (background-color deviation per square, robust across
   themes and piece sets). Every sensed change is matched against the *legal
   moves* of the tracked game with `python-chess`, so captures, castling, en
@@ -51,7 +66,7 @@ Stockfish.
   tool keeps the tracked game and looks for it quietly in the background.
   Alt-tabbing does not open a dialog or restore/focus the control panel.
   Tracking resumes when a visible board matches again. You can always
-  resync by pasting the complete move list or current FEN.
+  use the inline piece review, or resync by pasting the complete move list or current FEN.
 - **Activity panel instead of notification dialogs.** Warnings appear in
   orange, errors in red, and checkmate, draws and recovery notices in green.
   The panel replaces the move log, suppresses consecutive duplicate entries,
@@ -59,8 +74,8 @@ Stockfish.
 - During a position mismatch, suggestions and arrows are cleared. Recent
   takebacks or mistaken branches can be repaired when the observed board
   has a unique match in recent tracked history or its legal next moves.
-  Ambiguous positions require a move list or FEN resync rather than guessing
-  whose turn it is.
+  If recent history cannot resolve the mismatch, the piece review asks for
+  game details instead of guessing whose turn it is.
 
 ## Setup
 
@@ -82,8 +97,9 @@ To rebuild on Windows using the project's virtual environment:
 .\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean ChessAssistant.spec
 ```
 
-The result is `dist/ChessAssistant.exe`. The spec embeds `engines/stockfish.exe`
-and the upstream license notices from `licenses/`; it does not embed your
+The result is `dist/ChessAssistant.exe`. The spec embeds `engines/stockfish.exe`,
+the recognition model from `app/assets/`, and upstream license notices from
+`licenses/`; it does not embed your
 personal `config.json`. To verify the built app without opening its control
 panel or changing settings:
 
@@ -91,8 +107,9 @@ panel or changing settings:
 .\dist\ChessAssistant.exe --self-test "$env:TEMP\chess-assistant-check.json"
 ```
 
-The JSON report covers bundled imports, screen-capture access, all twelve
-piece icons, the native overlay, a real engine suggestion and engine shutdown.
+The JSON report covers bundled imports, recognition model inference,
+screen-capture access, all twelve piece icons, the native overlay, a real
+engine suggestion and engine shutdown.
 This diagnostic requires an interactive Windows desktop.
 
 ### Run from Python
@@ -130,8 +147,11 @@ this tool just launches it as a separate process.
    have played its first move. No color selection or FEN is needed. If the
    game is further along, click **Import game…** and paste the **complete
    move list from the start**, such as `1. e4 e5 2. Nf3 Nc6`, or a PGN. FEN also remains
-   supported. An arbitrary midgame board cannot be reconstructed from square
-   colors alone; if neither moves nor FEN are available, start a fresh game.
+   supported. For an arbitrary midgame board, wait for the automatic piece
+   review and confirm the missing game details. A screenshot cannot prove
+   the side to move, historical castling rights, en passant or previous
+   repetitions. Move number and draw counter can be entered when known;
+   the defaults start a new position history at move 1 with counter 0.
 3. Play. Suggestions run **automatically on your turn**, including your
    first move and after FEN resync or board recovery. The panel shows
    the suggested move and an arrow on the mini-board when analysis is ready.
@@ -176,6 +196,13 @@ python tools/sense_test.py screenshot.png
   from their foreground, so White's pieces can be darker than the board.
   Pieces that blend almost completely into their square may still confuse
   occupancy sensing; use a clearer theme in that case.
+- **Uncertain or incorrect recognized pieces** — inspect orange squares in
+  the recovery preview and click a square to change its piece. Busy textures,
+  unfamiliar artwork, small boards, overlays and animations can cause mistakes.
+  The classifier is designed for clear 2D screen boards; it does not promise
+  arbitrary 3D, camera or physical-board recognition. Nothing is committed
+  until you confirm the review. Complete moves/PGN remain the best way to
+  restore historical draw information.
 
 ## Fair play
 
@@ -196,6 +223,9 @@ app/engine.py        Stockfish worker thread: best move + eval
 app/gui.py           Tkinter control panel
 app/overlay.py       Windows transparent click-through board arrow
 app/pieces.py        cached recognizable mini-board piece icons
+app/recognition.py   local ONNX piece classification and state validation
+app/recognition_ui.py inline piece corrections and missing game details
+app/assets/          bundled classifier model
 tools/sense_test.py  debug the sensor on an image file
 tests/               tracker and sensor test suites
 ```

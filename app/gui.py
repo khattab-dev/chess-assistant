@@ -17,8 +17,10 @@ from .engine import EngineWorker, LEVELS
 from .overlay import BoardArrowOverlay
 from .pieces import PieceRenderer
 from .paths import config_path
+from .recognition import PieceRecognizer, StableBoardReads
+from .recognition_ui import RecognitionReview
 from .squares import BoardSensor, chess_to_sensor_index, sensor_to_chess_index
-from .tracker import PositionTracker, board_to_sensor_states
+from .tracker import PositionTracker, _game_over_text, board_to_sensor_states
 
 CONFIG_PATH = str(config_path())
 
@@ -59,6 +61,12 @@ class ChessAssistantApp:
         self._promotion_tracker = None
         self.overlay = None
         self._overlay_move = None
+        self._recognizer = PieceRecognizer()
+        self._recognition_gate = StableBoardReads()
+        self._recognition_source = None
+        self._recognition_pending = None
+        self._recognition_review = None
+        self._next_recognition = 0.0
 
         self._build_ui()
         self._load_config()
@@ -100,6 +108,7 @@ class ChessAssistantApp:
 
         mid = ttk.Frame(self.root)
         mid.pack(fill="x", **pad)
+        self._board_body = mid
         self.board_canvas = tk.Canvas(mid, width=CELL * 8, height=CELL * 8,
                                       highlightthickness=0, bg="#222")
         self.board_canvas.grid(row=0, column=0, padx=(0, 12))
@@ -161,6 +170,8 @@ class ChessAssistantApp:
         sensor = BoardSensor(region)
         sensor.calibrate(frame)
         self.sensor = sensor
+        self._close_recognition()
+        self._recognition_source = None
         if not preserve_game:
             self.tracker = None
         if self.tracker is None:
@@ -188,8 +199,8 @@ class ChessAssistantApp:
             return
         self.tracker.reset_sensing()
         self._tracking_uncertain = False
-        self._set_status("Board calibrated. Detecting the opening and your color "
-                         "automatically from the bottom side.", "green")
+        self._set_status("Board calibrated. Detecting the opening or reading the pieces "
+                         "for midgame recovery.", "green")
         self._draw_board(None, True, None)
 
     def _place_panel_away_from_board(self, region: BoardRegion) -> None:
@@ -213,6 +224,7 @@ class ChessAssistantApp:
             self.root.geometry(f"+{cx}+{cy}")
 
     def _on_select_region(self) -> bool:
+        self._close_recognition()
         self._hide_overlay(clear=False)
         was_paused = self._paused
         self._paused = True
@@ -236,6 +248,7 @@ class ChessAssistantApp:
 
     def _on_auto_detect(self) -> bool:
         """Explicit detection may hide the panel; failures are logged inline."""
+        self._close_recognition()
         self._hide_overlay(clear=False)
         was_paused = self._paused
         self._paused = True
@@ -269,6 +282,7 @@ class ChessAssistantApp:
 
     # -- game control -------------------------------------------------------------
     def _on_new_game(self) -> None:
+        self._close_recognition()
         self._hide_overlay()
         self._clear_promotion()
         self._paused = False
@@ -285,6 +299,7 @@ class ChessAssistantApp:
         self._on_auto_detect()
 
     def _resync_fen(self) -> None:
+        self._close_recognition()
         if not self.sensor:
             self._set_status("Wait for a visible board before importing a game.", "orange")
             return
@@ -396,6 +411,7 @@ class ChessAssistantApp:
                 self._post(("tracking_started", tr))
                 self._post(("position", list(tr.occ), tr.white_bottom,
                             fen, list(tr.san_history)))
+
             elif res.status in ("uninitialized", "orientation_unknown"):
                 if not self._tracking_uncertain:
                     self._tracking_uncertain = True
@@ -443,6 +459,126 @@ class ChessAssistantApp:
                 self._set_status_event("Board matches again. Tracking resumed.", "green")
                 self._post(("position", list(tr.occ), tr.white_bottom,
                             fen, list(tr.san_history)))
+
+            if res.status in ("uninitialized", "orientation_unknown", "desync"):
+                self._consider_recognition(sensor, tr, frame, now)
+            elif res.status != "none" or not res.detail:
+                self._recognition_source = None
+
+    # -- full-piece recognition and inline recovery ----------------------------
+    def _consider_recognition(self, sensor, tr, frame, now) -> None:
+        if (self._paused or getattr(self, "_recognition_pending", None)
+                or now < getattr(self, "_next_recognition", 0.0)):
+            return
+        self._next_recognition = now + 0.4
+        source = (sensor, tr)
+        if source != getattr(self, "_recognition_source", None):
+            self._recognition_source = source
+            self._recognition_gate = StableBoardReads()
+            self._recognition_failure = None
+        if not hasattr(self, "_recognizer"):
+            self._recognizer = PieceRecognizer()
+        try:
+            read = self._recognizer.read(frame)
+            if not read.plausible:
+                detail = "Could not recognize both kings. Try a clear 2D piece set, or use 'Import game…'."
+                if detail != self._recognition_failure:
+                    self._set_status_event(detail, "orange")
+                    self._recognition_failure = detail
+                self._recognition_gate = StableBoardReads()
+                return
+            if (sensor is not self.sensor or tr is not self.tracker or self._paused
+                    or not self._recognition_gate.offer(read, now)):
+                return
+            self._recognition_pending = source
+            self._post(("recognition", sensor, tr, read))
+        except Exception as error:
+            detail = f"Piece recognition unavailable: {error} Use 'Import game…' to continue."
+            if detail != self._recognition_failure:
+                self._set_status_event(detail, "red")
+                self._recognition_failure = detail
+
+    def _ev_recognition(self, sensor, tr, read) -> None:
+        if getattr(self, "_recognition_pending", None) != (sensor, tr):
+            return
+        self._recognition_pending = None
+        if (sensor is not self.sensor or tr is not self.tracker or self._paused
+                or not self._tracking_uncertain or self._board_hidden):
+            return
+        self._paused = True
+        self._clear_advice()
+        self.suggest_lbl.grid_remove()
+        hint = tr.white_bottom if tr.orientation_known else None
+        self._recognition_review = RecognitionReview(
+            self._board_body, self.board_canvas, read, read.bottom_hint(hint),
+            self._draw_board, self._confirm_recognition,
+            self._retry_recognition, self._cancel_recognition, self._set_status)
+        self._recognition_review.grid(row=0, column=1, sticky="nw")
+        count = len(read.uncertain)
+        detail = f" {count} uncertain squares are outlined in orange." if count else ""
+        self._set_status("Pieces recognized. Review the board, bottom color, turn and game details; "
+                         "then choose Continue." + detail, "orange")
+
+    def _close_recognition(self, suppress: bool = False) -> None:
+        review = getattr(self, "_recognition_review", None)
+        if review:
+            if suppress:
+                self._recognition_gate.suppressed = review.read.symbols
+            review.destroy()
+            self._recognition_review = None
+            self.suggest_lbl.grid()
+            self._paused = False
+        self._recognition_pending = None
+
+    def _retry_recognition(self) -> None:
+        self._close_recognition()
+        self._recognition_gate = StableBoardReads()
+        self._next_recognition = 0.0
+        self._clear_advice()
+        self._set_status("Reading the visible board again…", "orange")
+
+    def _cancel_recognition(self) -> None:
+        self._close_recognition(suppress=True)
+        self._clear_advice()
+        self._set_status("Recovery cancelled. Use 'Detect board again' to retry, "
+                         "or import the game. Tracking remains paused until the board matches.", "orange")
+
+    def _confirm_recognition(self, board, white_bottom) -> None:
+        review = getattr(self, "_recognition_review", None)
+        if not review or not self.sensor:
+            return
+        try:
+            # The game may have changed while the review was open, or the user
+            # may have alt-tabbed. Never commit an old screenshot as live state.
+            frame = grab_region(self.sensor.region)
+            if not _looks_like_board(frame):
+                raise ValueError("The board is hidden. Return to the game and choose Read again.")
+            fresh = self._recognizer.read(frame)
+            if fresh.symbols != review.read.symbols:
+                raise ValueError("The board changed during review. Choose Read again before continuing.")
+            self.sensor.calibrate(frame)
+            states, _ = self.sensor.sense(frame)
+            if states != board_to_sensor_states(board, white_bottom):
+                raise ValueError("Some occupied squares or piece colors do not match the screen. "
+                                 "Check your edits or try a clearer piece theme.")
+            tracker = PositionTracker(follow_bottom=True)
+            tracker.set_recognized(board, white_bottom)
+        except Exception as error:
+            self._set_status(str(error), "red")
+            return
+        self._close_recognition()
+        self.tracker = tracker
+        self.user_color = tracker.user_color
+        self._last_states = states
+        self._tracking_uncertain = False
+        self._gameover_shown = False
+        self._desync_count = 0
+        self._suggested_fen = ""
+        self._ev_position(list(tracker.occ), white_bottom, tracker.fen, [])
+        side = "White" if white_bottom else "Black"
+        self._set_status(f"Position confirmed. Your color is {side} (bottom). Tracking resumed.", "green")
+        if board.is_game_over():
+            self._ev_gameover(_game_over_text(board))
 
     def _maybe_suggest(self, tr: PositionTracker, fen: str) -> None:
         """Called on the UI thread so reading engine strength is safe in Tk."""
@@ -546,8 +682,8 @@ class ChessAssistantApp:
     def _ev_import_needed(self, tr, detail) -> None:
         if tr is self.tracker and self._tracking_uncertain:
             self._clear_advice()
-            self._set_status(detail + " Use 'Import game…' with the full move list or FEN.",
-                             "orange")
+            self._set_status("Opening not recognized. Reading the pieces for midgame recovery. "
+                             "You can also use 'Import game…'.", "orange")
 
     def _ev_new_game_pending(self, tr) -> None:
         if tr is self.tracker and self._tracking_uncertain:
@@ -576,9 +712,7 @@ class ChessAssistantApp:
         if tr is not self.tracker or not self._tracking_uncertain:
             return
         self._clear_advice()
-        self._set_status("Tracking paused — checking the position. If it persists, "
-                         "use 'Import game…' with the move list or current FEN.",
-                         "orange")
+        self._set_status("Tracking paused — checking history and reading the pieces for recovery.", "orange")
 
     def _ev_board_lost(self, sensor) -> None:
         try:
@@ -613,6 +747,8 @@ class ChessAssistantApp:
             self._board_recovery_pending = False
 
     def _ev_position(self, _occ, white_bottom, fen, _sans) -> None:
+        if getattr(self, "_recognition_review", None):
+            return
         tr = self.tracker
         if not tr or fen != tr.fen:
             return
@@ -735,12 +871,19 @@ class ChessAssistantApp:
     def _clear_advice(self) -> None:
         self._hide_overlay()
         self.suggest_lbl.config(text="")
+        review = getattr(self, "_recognition_review", None)
+        if review:
+            review._redraw()
+            return
         if self.tracker:
             board = self.tracker.board
             self._draw_board(board.copy(stack=False) if board is not None else None,
                              self.tracker.white_bottom, None)
 
     def _copy_fen(self) -> None:
+        if getattr(self, "_recognition_review", None):
+            self._set_status("Confirm the recognized position before copying its FEN.", "orange")
+            return
         fen = self.fen_var.get()
         if fen:
             self.root.clipboard_clear()
@@ -748,6 +891,7 @@ class ChessAssistantApp:
 
     def _on_close(self) -> None:
         self._running = False
+        self._close_recognition()
         if self.overlay:
             self.overlay.close()
             self.overlay = None

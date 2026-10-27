@@ -1,0 +1,12 @@
+The bundled chess-tiles-v2.onnx classifier is from fenshot (MIT License).
+Copyright (c) 2026 SORTINO LABS S.R.L. (kibitzo.com).
+See Fenshot-MIT.txt for the full license.
+
+Upstream: https://github.com/scoriiu/fenshot
+Pinned revision: e2506a3964c0c70708583beee96a1e414361f529
+Asset: packages/fenshot/model/chess-tiles-v2.onnx
+SHA-256: 883f6a8e639e6d6b6399b3fda0508ad772e3c6f9cefa2e678a13f27b9fa6248d
+
+Chess Assistant supplies its own preprocessing, CPU OpenCV inference,
+stable-frame handling and explicit game-state review. The model runs
+locally, and no screenshots or positions are uploaded.

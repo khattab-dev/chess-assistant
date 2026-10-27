@@ -180,6 +180,19 @@ class PositionTracker:
             return self.set_fen(text, states_img)
         return self.set_moves(text, states_img)
 
+    def set_recognized(self, board: chess.Board, white_bottom: bool) -> None:
+        """Adopt a reviewed snapshot; its preceding move history is unknown."""
+        if not board.is_valid():
+            raise ValueError("The recognized position is not legal.")
+        self.board = board.copy(stack=False)
+        self.white_bottom = white_bottom
+        self.orientation_known = True
+        self._sync_bottom_color()
+        self.occ = _state64(self.board)
+        self.san_history = []
+        self.start_turn, self.start_fullmove = board.turn, board.fullmove_number
+        self.reset_sensing()
+
     def set_moves(self, text: str, states_img=None) -> str | None:
         """Reconstruct a complete position and history from the game's moves."""
         try:
