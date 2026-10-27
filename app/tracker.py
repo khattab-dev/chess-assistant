@@ -34,7 +34,8 @@ class _StrictGameBuilder(chess.pgn.GameBuilder):
 @dataclass
 class UpdateResult:
     status: str  # "none", "moved", "ambiguous", "desync", "resynced", "gameover",
-                 # "newgame_pending" or "newgame"
+                 # "newgame_pending", "newgame", "started", "uninitialized",
+                 # or "orientation_unknown"
     move: chess.Move | None = None
     san: str | None = None
     mover: chess.Color | None = None
@@ -84,9 +85,11 @@ def _game_over_text(board: chess.Board) -> str:
 
 
 class PositionTracker:
-    def __init__(self) -> None:
+    def __init__(self, *, follow_bottom: bool = False) -> None:
         self.board: chess.Board | None = None
         self.white_bottom = True   # which color the *screenshot* shows at the bottom
+        self.orientation_known = False
+        self.follow_bottom = follow_bottom
         self.occ: list[str] = [EMPTY] * 64  # canonical states, chess-square order
         self.san_history: list[str] = []
         self.start_turn: chess.Color = chess.WHITE
@@ -105,7 +108,7 @@ class PositionTracker:
         self._new_game_candidate = None
 
     # -- setup --------------------------------------------------------------
-    def start_from_sensed(self, states_img, user_color) -> str | None:
+    def start_from_sensed(self, states_img, user_color=None) -> str | None:
         """Initialize from the starting layout or up to two opening half-moves.
 
         This handles a White bot moving before the user can pick Black. Only
@@ -123,12 +126,14 @@ class PositionTracker:
                         "or the first two half-moves. Import the moves played "
                         "so far, paste a FEN, or start a new game.")
             self.white_bottom, opening = found
+        self.orientation_known = True
         self.board = chess.Board()
         self.start_turn = chess.WHITE
         self.start_fullmove = 1
         self.occ = _state64(self.board)
         self.san_history = []
         self.user_color = user_color
+        self._sync_bottom_color()
         if opening:
             self._commit_all(opening)
         self.reset_sensing()
@@ -221,13 +226,19 @@ class PositionTracker:
         return None
 
     def _infer_orientation(self, states_img) -> None:
-        self.white_bottom = True
         if states_img is not None:
             mism = {}
             for wb in (True, False):
                 expect = board_to_sensor_states(self.board, wb)
                 mism[wb] = sum(1 for a, b in zip(expect, states_img) if a != b)
-            self.white_bottom = mism[True] <= mism[False]
+            if mism[True] != mism[False]:
+                self.white_bottom = mism[True] < mism[False]
+                self.orientation_known = True
+        self._sync_bottom_color()
+
+    def _sync_bottom_color(self) -> None:
+        if self.follow_bottom:
+            self.user_color = self.white_bottom if self.orientation_known else None
 
     # -- per-frame update -----------------------------------------------------
     def update_stable(self, states_img, now: float | None = None) -> UpdateResult:
@@ -249,25 +260,47 @@ class PositionTracker:
         if self._pending_frames < 3 or age < 0.15:
             return UpdateResult("none", detail="waiting for a stable frame")
         key = (self.fen, states)
+        if self.board is None:
+            if key != self._evaluated_key:
+                error = self.start_from_sensed(list(states), self.user_color)
+                if error is None:
+                    return UpdateResult("started", detail="Opening and bottom color detected.")
+                self._evaluated_key = key
+                self._evaluated_result = UpdateResult("uninitialized", detail=error)
+            return self._evaluated_result
         if key != self._evaluated_key:
-            if (self.board is not None
+            if self.follow_bottom and not self.orientation_known:
+                matches = [wb for wb in (True, False)
+                           if states == tuple(board_to_sensor_states(self.board, wb))]
+                if len(matches) == 1:
+                    self.white_bottom = matches[0]
+                    self.orientation_known = True
+                    self._sync_bottom_color()
+                    self.reset_sensing()
+                    return UpdateResult("resynced", detail="Bottom color detected.")
+            if ((self.orientation_known or not self.follow_bottom)
                     and states != tuple(board_to_sensor_states(self.board, self.white_bottom))
                     and states == tuple(
                     board_to_sensor_states(self.board, not self.white_bottom))):
                 # Flipping the current board does not start a new game.
                 self.white_bottom = not self.white_bottom
+                self._sync_bottom_color()
                 self.reset_sensing()
                 return UpdateResult("resynced", detail="Board orientation updated.")
             self._evaluated_key = key
-            self._evaluated_result = self.update(states)
+            if self.follow_bottom and not self.orientation_known:
+                self._evaluated_result = UpdateResult(
+                    "orientation_unknown", detail="Cannot determine the bottom color from this position.")
+            else:
+                self._evaluated_result = self.update(states)
             self._history_checked = False
             self._new_game_candidate = None
-            if (self._evaluated_result.status in ("none", "desync")
+            if (self._evaluated_result.status in ("none", "desync", "orientation_unknown")
                     and self._evaluated_result.detail and self.board is not None
                     and states.count(WHITE) == 16 and states.count(BLACK) == 16):
                 # Legal moves take priority over reset detection. Only a full,
                 # uniquely recognized opening can replace the current game.
-                candidate = PositionTracker()
+                candidate = PositionTracker(follow_bottom=self.follow_bottom)
                 if candidate.start_from_sensed(list(states), self.user_color) is None:
                     self._new_game_candidate = candidate
         if self._new_game_candidate is not None:
@@ -276,6 +309,8 @@ class PositionTracker:
             candidate = self._new_game_candidate
             self.board = candidate.board
             self.white_bottom = candidate.white_bottom
+            self.orientation_known = candidate.orientation_known
+            self._sync_bottom_color()
             self.occ = list(candidate.occ)
             self.san_history = list(candidate.san_history)
             self.start_turn = candidate.start_turn

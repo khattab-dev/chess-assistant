@@ -165,11 +165,12 @@ def test_blank_manual_selection_is_not_accepted(app, monkeypatch):
     assert "Calibration failed" in app._set_status.call_args.args[0]
 
 
-def test_color_selection_detects_board_before_starting(app):
-    app._on_auto_detect = Mock(return_value=False)
-    app._on_pick_color(chess.WHITE)
-    app._on_auto_detect.assert_called_once()
-    assert app.tracker is None
+def test_calibration_creates_automatic_bottom_color_tracker(app, monkeypatch):
+    monkeypatch.setattr("app.gui.grab_region", lambda _: render_board(chess.Board(), "green"))
+    app._apply_region(BoardRegion(100, 100, 512, 512))
+    assert app.tracker.follow_bottom
+    assert app.tracker.board is None  # start only after stable capture frames
+    assert app.user_color is None
 
 
 def test_new_game_detects_board_again(app):

@@ -1,21 +1,24 @@
 # Chess Assistant
 
 A Python desktop tool that watches a chess game on your screen (chess.com,
-lichess, or any other site/app), lets you pick your color, tracks the live
+lichess, or any other site/app), detects your color at the bottom, tracks the live
 position, and suggests the best move with an arrow — powered by
 Stockfish.
 
 ## How it works
 
-- **No FEN needed for a normal start.** Pick your color even if a White bot
-  has already moved. The tool matches the starting layout or the first two
+- **Automatic color and tracking.** You always play the color at the bottom.
+  The tool starts after a stable opening is visible and updates your color
+  after new games, board flips and game imports. No color buttons are needed.
+- **No FEN needed for a normal start.** A White bot can already have moved.
+  The tool matches the starting layout or the first two
   half-moves against legal openings in either board orientation, retaining
   the detected moves and the correct side to move.
 - **Automatic new-game detection.** When a tracked game returns to a fresh
   starting layout, the tool confirms it for about a second, clears the old
   history and result, and resumes automatic tracking. It also recognizes a
-  new game if the first one or two half-moves already happened. Your chosen
-  color is kept; choose your color again if you switched sides. New-game
+  new game if the first one or two half-moves already happened. Your color
+  is detected again from the bottom side, including when you switch sides. New-game
   notices appear in green in **Activity**, without opening dialogs or
   restoring the control panel. Ordinary legal moves and board flips keep
   the existing game history.
@@ -74,11 +77,12 @@ this tool just launches it as a separate process.
    or use **Detect board again** when it is visible.
    The control panel moves out of the board's way when screen space allows;
    keep the full board unobstructed for tracking.
-2. **I'm White / I'm Black** — choose your color. The starting layout and
-   the first two half-moves are recognized automatically, so a bot playing
-   White can make its first move before you click **I'm Black**. No FEN is
-   needed. If the game is further along, paste the **complete move list from
-   the start**, such as `1. e4 e5 2. Nf3 Nc6`, or a PGN. FEN also remains
+2. **Automatic color** — keep your side at the bottom. The tool recognizes
+   the starting layout or first two half-moves, detects White or Black at
+   the bottom, and starts tracking automatically. A White bot can already
+   have played its first move. No color selection or FEN is needed. If the
+   game is further along, click **Import game…** and paste the **complete
+   move list from the start**, such as `1. e4 e5 2. Nf3 Nc6`, or a PGN. FEN also remains
    supported. An arbitrary midgame board cannot be reconstructed from square
    colors alone; if neither moves nor FEN are available, start a fresh game.
 3. Play. Suggestions run **automatically on your turn**, including your
@@ -88,8 +92,10 @@ this tool just launches it as a separate process.
    and game results appear only in **Activity**. Move tracking runs at several
    frames per second.
 4. **Copy FEN** copies the tracked position to the clipboard. If tracking
-   cannot recover, choose your color again and import the full move list,
-   PGN, or current FEN when prompted. Suggestions run automatically; there
+   cannot recover, use **Import game…** with the full move list, PGN, or
+   current FEN. The bottom color is detected from the imported position and
+   visible board; uncertain orientation does not trigger a guessed color.
+   Suggestions run automatically; there
    is no manual suggestion button or visible FEN field.
 
 Engine strength: **Casual / Balanced / Max** (Stockfish Skill Level and

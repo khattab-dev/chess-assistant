@@ -1,4 +1,4 @@
-"""Tkinter control panel: region selection, color pick, live suggestions."""
+"""Tkinter control panel: automatic tracking, bottom-side color, suggestions."""
 from __future__ import annotations
 
 import json
@@ -81,10 +81,8 @@ class ChessAssistantApp:
 
         game = ttk.Frame(self.root)
         game.pack(fill="x", **pad)
-        ttk.Button(game, text="I'm White",
-                   command=lambda: self._on_pick_color(chess.WHITE)).pack(side="left")
-        ttk.Button(game, text="I'm Black",
-                   command=lambda: self._on_pick_color(chess.BLACK)).pack(side="left", padx=6)
+        ttk.Button(game, text="Import game…",
+                   command=self._resync_fen).pack(side="left")
         ttk.Button(game, text="New game",
                    command=self._on_new_game).pack(side="left", padx=6)
         ttk.Label(game, text="Engine:").pack(side="left", padx=(14, 2))
@@ -154,6 +152,9 @@ class ChessAssistantApp:
         self.sensor = sensor
         if not preserve_game:
             self.tracker = None
+        if self.tracker is None:
+            self.tracker = PositionTracker(follow_bottom=True)
+            self.user_color = None
         self._suggested_fen = ""
         self._last_states = None
         self._desync_count = 0
@@ -163,7 +164,7 @@ class ChessAssistantApp:
         self._place_panel_away_from_board(region)
         if save:
             self._save_config()
-        if self.tracker:
+        if self.tracker.board is not None:
             self.tracker.reset_sensing()
             self._draw_board(self.tracker.occ, self.tracker.white_bottom, None)
             self._set_status("Board found. Checking the tracked position…"
@@ -171,8 +172,10 @@ class ChessAssistantApp:
                              "Board found. Tracking resumed.",
                              "orange" if self._tracking_uncertain else "green")
             return
-        self._set_status("Board calibrated. Click 'I'm White' or 'I'm Black'. "
-                         "The first opening moves are detected automatically.", "green")
+        self.tracker.reset_sensing()
+        self._tracking_uncertain = False
+        self._set_status("Board calibrated. Detecting the opening and your color "
+                         "automatically from the bottom side.", "green")
         self._draw_board([EMPTY] * 64, True, None)
 
     def _place_panel_away_from_board(self, region: BoardRegion) -> None:
@@ -249,51 +252,6 @@ class ChessAssistantApp:
             self._paused = was_paused
 
     # -- game control -------------------------------------------------------------
-    def _on_pick_color(self, color: chess.Color) -> None:
-        if not self.sensor:
-            if not self._on_auto_detect():
-                return
-        self._paused = True
-        try:
-            frame = grab_region(self.sensor.region)
-            states, _ = self.sensor.sense(frame)
-        except Exception as e:
-            self._paused = False
-            self._set_status(f"Could not read the board: {e}", "red")
-            return
-        self.tracker = PositionTracker()
-        err = self.tracker.start_from_sensed(states, color)
-        if err:
-            position = simpledialog.askstring(
-                "Chess Assistant",
-                err + "\n\nPaste the full move list from the start "
-                      "(for example 1. e4 e5 2. Nf3), or a FEN if available:",
-                parent=self.root)
-            if not position:
-                self.tracker = None
-                self._paused = False
-                return
-            err = self.tracker.set_position(position, states)
-            if err:
-                self.tracker = None
-                self._paused = False
-                self._set_status(err, "red")
-                return
-        self.user_color = color
-        self.tracker.user_color = color
-        self._clear_promotion()
-        self._tracking_uncertain = False
-        self._desync_count = 0
-        self._gameover_shown = False
-        self._suggested_fen = ""
-        self._last_states = states
-        side = "White" if color == chess.WHITE else "Black"
-        self._post(("position", list(self.tracker.occ), self.tracker.white_bottom,
-                    self.tracker.fen, list(self.tracker.san_history)))
-        self._set_status(f"Tracking — you play {side}. "
-                         "Suggestions appear on your turn.", "green")
-        self._paused = False
-
     def _on_new_game(self) -> None:
         self._clear_promotion()
         self._paused = False
@@ -311,35 +269,41 @@ class ChessAssistantApp:
 
     def _resync_fen(self) -> None:
         if not self.sensor:
+            self._set_status("Wait for a visible board before importing a game.", "orange")
             return
-        position = simpledialog.askstring(
-            "Chess Assistant", "Paste the full move list from the start "
-            "(for example 1. e4 e5 2. Nf3), or the current FEN:",
-            parent=self.root)
-        if not position:
-            return
+        resume_paused = self._paused
         self._paused = True
         try:
+            position = simpledialog.askstring(
+                "Import game", "Paste the full move list from the start "
+                "(for example 1. e4 e5 2. Nf3), or the current FEN:\n"
+                "Your color will be detected from the bottom side.",
+                parent=self.root)
+            if not position:
+                return
             if not self.tracker:
-                self.tracker = PositionTracker()
+                self.tracker = PositionTracker(follow_bottom=True)
+            self.tracker.follow_bottom = True
             err = self.tracker.set_position(position, self._last_states)
             if err:
                 self._set_status(err, "red")
                 return
-            if self.tracker.user_color is None:
-                self.tracker.user_color = self.user_color
-            else:
-                self.user_color = self.tracker.user_color
+            self.user_color = self.tracker.user_color
             self._suggested_fen = ""
             self._gameover_shown = False
             self._tracking_uncertain = False
             self._desync_count = 0
             self._clear_promotion()
+            resume_paused = False
             self._post(("position", list(self.tracker.occ), self.tracker.white_bottom,
                         self.tracker.fen, list(self.tracker.san_history)))
-            self._set_status("Position resynced.", "green")
+            if self.user_color is None:
+                self._set_status("Game imported. Waiting to determine the bottom color.", "orange")
+            else:
+                side = "White" if self.user_color == chess.WHITE else "Black"
+                self._set_status(f"Game imported. Your color is {side} (bottom).", "green")
         finally:
-            self._paused = False
+            self._paused = resume_paused
 
     # -- capture loop -----------------------------------------------------------
     def _scan_for_board(self, sensor, now: float) -> None:
@@ -408,7 +372,17 @@ class ChessAssistantApp:
             self._last_states = states
             res = tr.update_stable(states)
             fen = tr.fen
-            if res.status == "newgame":
+            if res.status == "started":
+                self._desync_count = 0
+                self._tracking_uncertain = False
+                self._post(("tracking_started", tr))
+                self._post(("position", list(tr.occ), tr.white_bottom,
+                            fen, list(tr.san_history)))
+            elif res.status in ("uninitialized", "orientation_unknown"):
+                if not self._tracking_uncertain:
+                    self._tracking_uncertain = True
+                    self._post(("import_needed", tr, res.detail))
+            elif res.status == "newgame":
                 self._desync_count = 0
                 self._tracking_uncertain = False
                 self._post(("new_game", tr))
@@ -424,12 +398,12 @@ class ChessAssistantApp:
                 self._tracking_uncertain = False
                 if res.status == "resynced":
                     self._suggested_fen = ""
-                who = "You" if res.mover == self.user_color else "Opponent"
+                who = "You" if res.mover == tr.user_color else "Opponent"
                 msg = res.detail if res.status == "resynced" else f"{who} played {res.san}."
                 if res.status == "gameover":
                     self._post(("gameover", res.detail))
                 else:
-                    if tr.board.turn == self.user_color:
+                    if tr.board.turn == tr.user_color:
                         msg += " Your move — thinking…"
                     self._set_status_event(
                         msg, "green" if was_uncertain or res.status == "resynced" else None)
@@ -492,13 +466,28 @@ class ChessAssistantApp:
             except queue.Empty:
                 pass
         if self.tracker:
-            # Covers initial color selection, opponent moves, new games,
+            # Covers automatic startup, opponent moves, new games,
             # imports, missed frames and board recovery without another click.
             self._maybe_suggest(self.tracker, self.tracker.fen)
         self.root.after(80, self._poll)
 
     def _ev_status(self, text, color=None) -> None:
         self._set_status(text, color)
+
+    def _ev_tracking_started(self, tr) -> None:
+        if tr is not self.tracker:
+            return
+        self.user_color = tr.user_color
+        self._gameover_shown = False
+        self._suggested_fen = ""
+        side = "White" if tr.user_color == chess.WHITE else "Black"
+        self._set_status(f"Your color detected: {side} (bottom). Tracking started.", "green")
+
+    def _ev_import_needed(self, tr, detail) -> None:
+        if tr is self.tracker and self._tracking_uncertain:
+            self._clear_advice()
+            self._set_status(detail + " Use 'Import game…' with the full move list or FEN.",
+                             "orange")
 
     def _ev_new_game_pending(self, tr) -> None:
         if tr is self.tracker and self._tracking_uncertain:
@@ -516,10 +505,10 @@ class ChessAssistantApp:
         self.user_color = tr.user_color
         self._clear_advice()
         if tr.user_color is None:
-            detail = "Choose your color to begin."
+            detail = "Detecting the color at the bottom."
         else:
             side = "White" if tr.user_color == chess.WHITE else "Black"
-            detail = f"Tracking as {side}. Choose your color again if it changed."
+            detail = f"Your color is {side} (bottom)."
         self._last_log_entry = None
         self._set_status("New game detected. " + detail, "green")
 
@@ -528,7 +517,7 @@ class ChessAssistantApp:
             return
         self._clear_advice()
         self._set_status("Tracking paused — checking the position. If it persists, "
-                         "choose your color again to import the move list or current FEN.",
+                         "use 'Import game…' with the move list or current FEN.",
                          "orange")
 
     def _ev_board_lost(self, sensor) -> None:
@@ -545,18 +534,18 @@ class ChessAssistantApp:
     def _ev_board_visible(self, sensor) -> None:
         if sensor is not self.sensor or self._board_hidden:
             return
-        if self.tracker:
+        if self.tracker and self.tracker.board is not None:
             self._set_status("Board visible again. Checking the position…", "orange")
         else:
             self._tracking_uncertain = False
-            self._set_status("Board visible again. Choose your color to begin.", "green")
+            self._set_status("Board visible again. Detecting the opening and your color.", "green")
 
     def _ev_board_found(self, previous_sensor, region) -> None:
         try:
             if previous_sensor is not self.sensor:
                 return
             self._apply_region(region, preserve_game=True)
-            if not self.tracker:
+            if not self.tracker or self.tracker.board is None:
                 self._tracking_uncertain = False
         except Exception as e:
             self._set_status(f"Could not recalibrate the board: {e}", "red")
@@ -570,14 +559,22 @@ class ChessAssistantApp:
         if self._promotion_tracker is tr:
             self._clear_promotion()
             self._paused = False
+        if self.user_color != tr.user_color:
+            self.user_color = tr.user_color
+            self._suggested_fen = ""
+            if self.user_color is not None:
+                side = "White" if self.user_color == chess.WHITE else "Black"
+                self._set_status(f"Your color is now {side} (bottom).", "green")
         self.fen_var.set(fen)
         self._draw_board(occ, white_bottom, None)
         self.suggest_lbl.config(text="")
 
     def _ev_eval(self, data) -> None:
         tr = self.tracker
-        if (not self.sensor or not tr or self._tracking_uncertain or self._board_hidden
-                or data["fen"] != tr.fen):
+        if (not self.sensor or not tr or tr.board is None
+                or self._tracking_uncertain or self._board_hidden
+                or data["fen"] != tr.fen or tr.board.turn != tr.user_color
+                or tr.board.is_game_over()):
             return  # stale suggestion — the position moved on
         self.suggest_lbl.config(text=f"Play  {data['san']}")
         self._draw_board(tr.occ, tr.white_bottom, data["uci"])

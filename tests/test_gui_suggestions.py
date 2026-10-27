@@ -133,7 +133,7 @@ def test_automatic_analysis_waits_for_valid_active_game(app, blocked):
 
 
 @pytest.mark.parametrize("existing_tracker", [False, True])
-def test_resync_preserves_black_and_automatically_analyzes(app, monkeypatch, existing_tracker):
+def test_import_detects_black_at_bottom_and_automatically_analyzes(app, monkeypatch, existing_tracker):
     board = chess.Board()
     board.push_san("e4")
     if existing_tracker:
@@ -142,7 +142,7 @@ def test_resync_preserves_black_and_automatically_analyzes(app, monkeypatch, exi
     else:
         app.tracker = None
         app.user_color = chess.BLACK
-    app._last_states = board_to_sensor_states(board, True)
+    app._last_states = board_to_sensor_states(board, False)
     monkeypatch.setattr("app.gui.simpledialog.askstring", lambda *a, **k: board.fen())
 
     app._resync_fen()
@@ -153,16 +153,14 @@ def test_resync_preserves_black_and_automatically_analyzes(app, monkeypatch, exi
     app.engine_worker.submit.assert_called_once_with(board.fen(), "Balanced")
 
 
-def test_joining_midgame_keeps_chosen_color_for_automatic_analysis(app, monkeypatch):
+def test_joining_midgame_detects_bottom_color_for_automatic_analysis(app, monkeypatch):
     board = chess.Board()
     for san in ["e4", "e5", "Nf3"]:
         board.push_san(san)
-    states = board_to_sensor_states(board, True)
-    app.sensor.sense.return_value = (states, [])
-    monkeypatch.setattr("app.gui.grab_region", lambda _: object())
+    app._last_states = board_to_sensor_states(board, False)
     monkeypatch.setattr("app.gui.simpledialog.askstring", lambda *a, **k: board.fen())
 
-    app._on_pick_color(chess.BLACK)
+    app._resync_fen()
     app._poll()
 
     assert app.tracker.user_color == chess.BLACK
@@ -245,26 +243,34 @@ def test_bot_opening_is_detected_and_suggested_without_fen(app, monkeypatch, whi
     prompt = Mock(side_effect=AssertionError("Opening must not request a FEN"))
     monkeypatch.setattr("app.gui.simpledialog.askstring", prompt)
 
-    app._on_pick_color(chess.BLACK)
+    app.tracker = PositionTracker(follow_bottom=True)
+    for now in (0, 0.1, 0.2):
+        result = app.tracker.update_stable(states, now=now)
+    assert result.status == "started"
+    app._post(("tracking_started", app.tracker))
+    post_position(app)
     app._poll()
 
     prompt.assert_not_called()
     assert app.tracker.white_bottom == white_bottom
     assert app.tracker.san_history == ["e4"]
     assert app.tracker.board.turn == chess.BLACK
-    app.engine_worker.submit.assert_called_once_with(board.fen(), "Balanced")
+    assert app.user_color == white_bottom
+    if white_bottom == chess.BLACK:
+        app.engine_worker.submit.assert_called_once_with(board.fen(), "Balanced")
+    else:
+        app.engine_worker.submit.assert_not_called()
 
 
 def test_later_game_can_start_from_move_list_instead_of_fen(app, monkeypatch):
     board = chess.Board()
     for san in ["e4", "e5", "Nf3", "Nc6", "Bb5"]:
         board.push_san(san)
-    app.sensor.sense.return_value = (board_to_sensor_states(board, False), [])
-    monkeypatch.setattr("app.gui.grab_region", lambda _: object())
+    app._last_states = board_to_sensor_states(board, False)
     monkeypatch.setattr("app.gui.simpledialog.askstring",
                         lambda *a, **k: "1. e4 e5 2. Nf3 Nc6 3. Bb5")
 
-    app._on_pick_color(chess.BLACK)
+    app._resync_fen()
     app._poll()
 
     assert app.tracker.fen == board.fen()
@@ -278,7 +284,7 @@ def test_resync_accepts_full_move_list_without_fen(app, monkeypatch):
     for san in ["d4", "d5", "c4"]:
         board.push_san(san)
     app.user_color = app.tracker.user_color = chess.BLACK
-    app._last_states = board_to_sensor_states(board, True)
+    app._last_states = board_to_sensor_states(board, False)
     monkeypatch.setattr("app.gui.simpledialog.askstring",
                         lambda *a, **k: "1. d4 d5 2. c4")
 

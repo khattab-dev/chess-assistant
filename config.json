@@ -1,9 +1,9 @@
 {
-  "strength": "Balanced",
+  "strength": "Max",
   "region": {
-    "left": 234,
+    "left": 224,
     "top": 152,
-    "width": 576,
-    "height": 576
+    "width": 608,
+    "height": 608
   }
 }

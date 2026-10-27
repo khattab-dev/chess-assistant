@@ -87,6 +87,9 @@ def test_activity_replaces_moves_and_manual_suggest_button_is_removed(ui):
     frames = [w.cget("text") for w in widgets if w.winfo_class() == "TLabelframe"]
     assert "Suggest now" not in buttons
     assert "Copy FEN" in buttons
+    assert "Import game…" in buttons
+    assert "I'm White" not in buttons
+    assert "I'm Black" not in buttons
     assert "Resync…" not in buttons
     assert not any(w.cget("text") == "FEN:" for w in widgets
                    if w.winfo_class() == "TLabel")
@@ -121,14 +124,14 @@ def test_promotion_is_chosen_inline_without_a_popup(ui):
 
 
 def test_automatic_new_game_notice_is_green_and_clears_old_result_without_popup(ui):
-    tracker = PositionTracker()
-    tracker.start_from_sensed(["B"] * 16 + ["."] * 32 + ["W"] * 16, chess.BLACK)
+    tracker = PositionTracker(follow_bottom=True)
+    tracker.start_from_sensed(["W"] * 16 + ["."] * 32 + ["B"] * 16)
     ui.tracker = tracker
     ui._gameover_shown = True
     ui._ev_new_game(tracker)
     assert not ui._gameover_shown
     assert ui.user_color == chess.BLACK
-    assert "SUCCESS: New game detected. Tracking as Black." in ui.activity_txt.get("1.0", "end-1c")
+    assert "SUCCESS: New game detected. Your color is Black (bottom)." in ui.activity_txt.get("1.0", "end-1c")
     assert ui.activity_txt.tag_ranges("success")
     assert ui.suggest_lbl.cget("text") == ""
     assert ui.root.state() == "withdrawn"
